@@ -74,6 +74,23 @@ test('proofread：无 apiKey 时词典层照常工作', async () => {
 	assert.ok(origs.includes('帐号'))
 })
 
+test('proofread：llmOnly 跳过 host 侧词典扫描（v3 起词典在浏览器本地跑）', async () => {
+	const handler = makeHandler()
+	const res = await handler('proofread', { text: '他迫不急待地想回家', llmOnly: true })
+	assert.equal(res.ok, true)
+	// 无 apiKey → LLM 层为空；词典层被 llmOnly 跳过 → 应为空
+	assert.equal(res.value.issues.length, 0)
+})
+
+test('proofread：新默认值（补全/LLM 800ms、词典 200ms）', async () => {
+	assert.equal(DEFAULT_CONFIG.completionDebounceMs, 800)
+	assert.equal(DEFAULT_CONFIG.proofreadDebounceMs, 800)
+	assert.equal(DEFAULT_CONFIG.proofreadDictDebounceMs, 200)
+	const handler = makeHandler()
+	const res = await handler('config.get', {})
+	assert.equal(res.value.proofreadDictDebounceMs, 200)
+})
+
 test('proofread：功能关闭返回空', async () => {
 	const handler = makeHandler({ proofreadEnabled: false })
 	const res = await handler('proofread', { text: '他迫不急待地想回家' })
