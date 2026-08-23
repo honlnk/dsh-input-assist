@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { parseIssuesJson, locateIssues, mergeIssues } from '../lib/proofread-llm.js'
+import { parseIssuesJson, locateIssues, mergeIssues } from '../src/proofread-llm.ts'
 
 test('解析 ```json 围栏输出', () => {
 	const raw = '```json\n{"issues":[{"orig":"在说","fix":"再说","reason":"时间副词"}]}\n```'

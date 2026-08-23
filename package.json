@@ -7,6 +7,7 @@
 	"license": "MIT",
 	"exports": {
 		".": {
+			"types": "./lib/index.d.ts",
 			"default": "./lib/index.js"
 		},
 		"./client": {
@@ -37,10 +38,12 @@
 		"README.md"
 	],
 	"scripts": {
-		"test": "node --test test/*.test.js"
+		"build": "tsdown",
+		"test": "npm run build && node --test test/*.test.js",
+		"prepack": "npm run build"
 	},
 	"dependencies": {
-		"@deepseek-ai/dsh-settings": "0.1.0-rc.6",
+		"@deepseek-ai/dsh-settings": "^0.1.1-rc.2",
 		"@deepseek-ai/schemastery": "3.18.1"
 	},
 	"peerDependencies": {
@@ -48,6 +51,11 @@
 		"react": "^18.2.0"
 	},
 	"devDependencies": {
-		"@deepseek-ai/cordis": "^4.0.1"
+		"@deepseek-ai/cordis": "^4.0.1",
+		"@deepseek-ai/dsh-client-runtime": "^0.1.1-rc.2",
+		"@types/node": "^26.2.0",
+		"@types/react": "^18.3.31",
+		"tsdown": "^0.22.14",
+		"typescript": "^7.0.2"
 	}
 }

@@ -54,13 +54,20 @@ API key 三选一（补全与 LLM 检查层需要；词典层无需任何配置�
 | `proofreadDebounceMs` | `800` | LLM 层防抖（与补全同节奏，两路同时返回） |
 | `proofreadDictDebounceMs` | `200` | 词典层防抖（浏览器本地扫描，零成本） |
 
-## 测试
+## 开发与测试
+
+源码在 `src/*.ts`（TypeScript strict 模式），构建用 [tsdown](https://tsdown.dev) 双入口：
+
+- `src/index.ts` → `lib/index.js`（ESM + `.d.ts`，host 半边，cordis loader 直接 import）
+- `src/client.ts` → `lib/client.js`（CJS，banner/footer 自动包 `window.__ModuleLoader__.load` 壳，react / dsh-client-runtime 保持外部依赖，词典等本地模块打包进 bundle）
 
 ```shell
-npm install --legacy-peer-deps
-npm install -D @deepseek-ai/cordis@^4.0.1 --legacy-peer-deps   # 测试用 peer 依赖
-npm test     # 35 个用例（含词典双端同步守卫）
+npm install
+npm run build   # tsc 类型检查由 tsdown 内置完成；产物落 lib/
+npm test        # 先 build，再跑 node --test（单测指向 src/*.ts，产物守卫指向 lib/client.js）
 ```
+
+词典曾以 DICT-SHARED 标记块在两侧逐字同步，TS 化后单一源 `src/proofread-dict.ts` 由构建器打进两侧，`test/client-bundle.test.js` 用假 ModuleLoader 真正执行 bundle 产物做守卫。
 
 ## 文档
 
@@ -68,17 +75,18 @@ npm test     # 35 个用例（含词典双端同步守卫）
 - [docs/开发记录-v1.md](./docs/开发记录-v1.md) — v1 实施记录、验证结果、踩坑清单（RPC 错误码枚举、IAB 点击问题等）
 - [docs/开发记录-v2.md](./docs/开发记录-v2.md) — v2 错别字改版：红字镜像层、导航交互、快捷键冲突排查与验证状态
 - [docs/开发记录-v3.md](./docs/开发记录-v3.md) — v3 NovAI 化改版：ghost text、逐词采纳、词典层下沉浏览器、双层防抖拆分
+- [docs/开发记录-v4.md](./docs/开发记录-v4.md) — v4 TypeScript 重构：tsdown 双入口构建、词典单源化、产物守卫测试
 
 ## 架构一览
 
 ```
-浏览器半边（lib/client.js）                    host 半边（lib/index.js）
+浏览器半边（lib/client.js，tsdown 从 src/client.ts 打包）   host 半边（lib/index.js）
   input.overlay  仅错误提示（无浮层）     loopback    settings 命名空间 input-assist
   input.dock     错别字面板+修正      ───RPC /input-assist───▶  complete   → FIM /beta/completions
   input.right    补/校 开关                             proofread → LLM 层（llmOnly）
   useInput 读草稿 · inputActions.setDraft 写回
   镜像层（body 挂载）：文中红字 + 光标后灰色 ghost 建议
-  词典层本地运行（DICT-SHARED 块与 lib/proofread-dict.js 逐字同步，dict-sync 测试守护）
+  词典层本地运行（单源 src/proofread-dict.ts，构建时打进 client bundle）
 ```
 
 ## 状态
@@ -89,6 +97,7 @@ npm test     # 35 个用例（含词典双端同步守卫）
 - [x] M2 错别字检查（词典 + LLM 双层，点击修正）
 - [x] v2 错别字改版（文中红字标注、逐条导航、标记正确、快捷键）
 - [x] v3 NovAI 化改版（ghost text 内联建议、Tab 逐词采纳、词典层下沉浏览器 200ms、LLM/补全统一 800ms）
+- [x] v4 TypeScript 重构（src/ 全量 TS、tsdown 双入口构建、词典单源化、37 测试）
 - [ ] M2.5 真实 key 联调 + 真实 Chrome 中验证点击/快捷键手感
 - [ ] M3 流式 / 设置 UI
 - [ ] M4 发布（npm + dsh-plugin topic）

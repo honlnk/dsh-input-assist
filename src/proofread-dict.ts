@@ -9,17 +9,30 @@
 //      (登陆账号→登录账号, 带口罩→戴口罩 …) expressed as anchored regexes.
 // Context-dependent pairs (在/再, 的/得/地, 像/象 …) are deliberately NOT
 // listed here — they cannot be decided without a sentence, so they are left
-// to the LLM layer (proofread-llm.js).
+// to the LLM layer (proofread-llm.ts).
 // All offsets refer to the ORIGINAL text: scan targets are masked with
 // same-length placeholders (code spans, fenced blocks, URLs) so indices stay
 // valid without ever flagging content inside them.
+//
+// Single source for BOTH sides: the host imports this module directly, and
+// the browser half bundles it via tsdown — no more DICT-SHARED copy block.
 
-// ==== DICT-SHARED-BEGIN ====
-// 此标记区间内的代码会被原样内嵌进 lib/client.js（浏览器侧本地词典层），
-// 两端内容必须保持逐字一致；test/dict-sync.test.js 负责校验漂移。
-// 约束：不得使用 import/export / node 内置模块，保持纯 ES2020。
-/** Unambiguous wrong→right word map (common miswritten idioms and words). */
-const WRONG_PHRASES = {
+/** A located typo: offsets refer to the original (unmasked) text. */
+export interface TypoIssue {
+	orig: string
+	fix: string
+	offset: number
+	reason: string
+	source: 'dict' | 'llm'
+}
+
+export interface ContextRule {
+	regex: RegExp
+	fix: (m: RegExpExecArray) => string
+	reason: string
+}
+
+export const WRONG_PHRASES: Record<string, string> = {
 	// —— 成语 / 固定词组常见误写 ——
 	'迫不急待': '迫不及待',
 	'一如继往': '一如既往',
@@ -260,7 +273,7 @@ delete WRONG_PHRASES['好象']
  * Context-gated confusions: wrong only in the matched collocation.
  * Each rule: global regex + fix(m) building the replacement for m[0].
  */
-const CONTEXT_RULES = [
+export const CONTEXT_RULES: ContextRule[] = [
 	{
 		regex: /登陆(系统|网站|网页|账号|账户|帐号|平台|页面|界面|邮箱|后台)/g,
 		fix: (m) => `登录${m[1]}`,
@@ -310,9 +323,9 @@ const CONTEXT_RULES = [
  * @param {string} text
  * @returns {string} same-length masked text
  */
-function maskForScan(text) {
+export function maskForScan(text: string): string {
 	let out = String(text ?? '')
-	const maskRange = (start, end) => {
+	const maskRange = (start: number, end: number) => {
 		out = out.slice(0, start) + '\u0000'.repeat(end - start) + out.slice(end)
 	}
 	// fenced code blocks
@@ -335,11 +348,11 @@ function maskForScan(text) {
  * @returns {{orig: string, fix: string, offset: number, reason: string, source: 'dict'}[]}
  * sorted by offset, overlap-deduplicated (longer match wins), capped.
  */
-function scanLocalTypos(text, limit = 8) {
+export function scanLocalTypos(text: string, limit = 8): TypoIssue[] {
 	const source = String(text ?? '')
 	if (source.length === 0) return []
 	const masked = maskForScan(source)
-	const found = []
+	const found: TypoIssue[] = []
 	for (const [wrong, right] of Object.entries(WRONG_PHRASES)) {
 		let idx = masked.indexOf(wrong)
 		while (idx !== -1) {
@@ -373,6 +386,3 @@ function scanLocalTypos(text, limit = 8) {
 	}
 	return out
 }
-// ==== DICT-SHARED-END ====
-
-export { WRONG_PHRASES, CONTEXT_RULES, maskForScan, scanLocalTypos }

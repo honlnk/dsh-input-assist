@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { extractCompletionText, normalizeSuggestion } from '../lib/completion.js'
+import { extractCompletionText, normalizeSuggestion } from '../src/completion.ts'
 
 test('legacy completions 响应三种字段形态都能读取', () => {
 	assert.equal(extractCompletionText({ choices: [{ text: '你好' }] }), '你好')

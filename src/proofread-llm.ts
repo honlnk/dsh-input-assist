@@ -1,12 +1,14 @@
 // LLM typo-check layer — the context-aware half of proofreading.
 //
-// The offline dictionary (proofread-dict.js) only catches unambiguous
+// The offline dictionary (proofread-dict.ts) only catches unambiguous
 // miswrites; context-dependent confusions (在/再, 的/得/地, 以为/已为 …)
 // need a sentence model. pycorrector solves this with Kenlm/MacBERT; here a
 // small chat model plays that role: strict Chinese prompt, temperature 0,
 // JSON-mode output. The model only nominates {orig, fix, reason} — the host
 // re-locates `orig` in the text itself, so a hallucinated offset can never
 // corrupt a click-to-fix edit.
+
+import type { TypoIssue } from './proofread-dict.js'
 
 const SYSTEM_PROMPT = [
 	'你是中文文本的错别字校对器。检查用户文本中的错别字，包括：',
@@ -19,34 +21,39 @@ const SYSTEM_PROMPT = [
 	'没有错误时输出 {"issues": []}。',
 ].join('\n')
 
+/** What the model nominates; offsets are computed by us, never by the model. */
+export interface RawIssue {
+	orig: string
+	fix: string
+	reason: string
+}
+
 /**
  * Robustly parse the model output into a raw issue list.
  * Accepts: bare array, {"issues": [...]}, ```json fences, prose-wrapped JSON.
- * @param {string} content
- * @returns {{orig: string, fix: string, reason: string}[]}
  */
-export function parseIssuesJson(content) {
+export function parseIssuesJson(content: string): RawIssue[] {
 	const raw = String(content ?? '').trim()
 	if (raw === '') return []
 	const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/)
-	const candidates = [fenced ? fenced[1] : null, raw].filter(Boolean)
+	const candidates = [fenced ? fenced[1] : null, raw].filter(Boolean) as string[]
 	for (const candidate of candidates) {
 		const text = candidate.trim()
 		try {
-			const parsed = JSON.parse(text)
-			const list = Array.isArray(parsed) ? parsed : parsed?.issues
+			const parsed: unknown = JSON.parse(text)
+			const list = Array.isArray(parsed) ? parsed : (parsed as { issues?: unknown })?.issues
 			if (Array.isArray(list)) return list.filter(isShapedIssue)
 		} catch {
 			// fall through to bracket extraction
 		}
 		// last resort: first '[' … last ']' / first '{' … last '}'
-		for (const [open, close] of [['[', ']'], ['{', '}']]) {
+		for (const [open, close] of [['[', ']'], ['{', '}']] as const) {
 			const start = text.indexOf(open)
 			const end = text.lastIndexOf(close)
 			if (start !== -1 && end > start) {
 				try {
-					const parsed = JSON.parse(text.slice(start, end + 1))
-					const list = Array.isArray(parsed) ? parsed : parsed?.issues
+					const parsed: unknown = JSON.parse(text.slice(start, end + 1))
+					const list = Array.isArray(parsed) ? parsed : (parsed as { issues?: unknown })?.issues
 					if (Array.isArray(list)) return list.filter(isShapedIssue)
 				} catch {
 					/* try next */
@@ -57,31 +64,27 @@ export function parseIssuesJson(content) {
 	return []
 }
 
-function isShapedIssue(item) {
+function isShapedIssue(item: unknown): item is RawIssue {
+	if (item === null || typeof item !== 'object') return false
+	const v = item as Record<string, unknown>
 	return (
-		item !== null &&
-		typeof item === 'object' &&
-		typeof item.orig === 'string' &&
-		typeof item.fix === 'string' &&
-		item.orig.length >= 1 &&
-		item.orig.length <= 10 &&
-		item.orig !== item.fix &&
-		!item.orig.includes('\n') &&
-		!item.fix.includes('\n')
+		typeof v.orig === 'string' &&
+		typeof v.fix === 'string' &&
+		v.orig.length >= 1 &&
+		v.orig.length <= 10 &&
+		v.orig !== v.fix &&
+		!v.orig.includes('\n') &&
+		!v.fix.includes('\n')
 	)
 }
 
 /**
  * Locate raw model issues in the text: the host (not the model) computes
  * offsets, dropping anything not found verbatim.
- * @param {{orig:string, fix:string, reason:string}[]} rawIssues
- * @param {string} text
- * @param {number} [limit=6]
- * @returns {{orig:string, fix:string, offset:number, reason:string, source:'llm'}[]}
  */
-export function locateIssues(rawIssues, text, limit = 6) {
+export function locateIssues(rawIssues: RawIssue[], text: string, limit = 6): TypoIssue[] {
 	const source = String(text ?? '')
-	const out = []
+	const out: TypoIssue[] = []
 	let searchFrom = 0
 	for (const item of rawIssues) {
 		if (!isShapedIssue(item)) continue
@@ -100,17 +103,17 @@ export function locateIssues(rawIssues, text, limit = 6) {
 	return out
 }
 
-/**
- * Run the LLM typo check.
- * @param {object} args
- * @param {string} args.baseUrl FIM base (…/beta is stripped for chat)
- * @param {string} args.apiKey
- * @param {string} args.model
- * @param {string} args.text
- * @param {number} [args.timeoutMs=12000]
- * @returns {Promise<{orig:string, fix:string, reason:string}[]>} raw issues
- */
-export async function llmProofread({ baseUrl, apiKey, model, text, timeoutMs = 12000 }) {
+export interface LlmProofreadArgs {
+	/** FIM base (…/beta is stripped for chat) */
+	baseUrl: string
+	apiKey: string
+	model: string
+	text: string
+	timeoutMs?: number
+}
+
+/** Run the LLM typo check. */
+export async function llmProofread({ baseUrl, apiKey, model, text, timeoutMs = 12000 }: LlmProofreadArgs): Promise<RawIssue[]> {
 	const base = String(baseUrl || 'https://api.deepseek.com').replace(/\/+$/, '').replace(/\/beta$/, '')
 	const res = await fetch(`${base}/chat/completions`, {
 		method: 'POST',
@@ -135,19 +138,17 @@ export async function llmProofread({ baseUrl, apiKey, model, text, timeoutMs = 1
 		const clip = body.length > 300 ? `${body.slice(0, 300)}…` : body
 		throw new Error(`proofread HTTP ${res.status}: ${clip}`)
 	}
-	const data = await res.json()
+	const data = (await res.json()) as { choices?: { message?: { content?: string } }[] }
 	const content = data?.choices?.[0]?.message?.content ?? ''
 	return parseIssuesJson(content)
 }
 
 /**
  * Merge local (dictionary) and LLM issues: local wins on overlap, sorted,
- * capped.
- * @param {{offset:number, orig:string}[]} local
- * @param {{offset:number, orig:string}[]} llm
- * @param {number} [limit=8]
+ * capped. Also used by the browser half (bundled) to stack LLM results on
+ * top of the locally-scanned dictionary marks.
  */
-export function mergeIssues(local, llm, limit = 8) {
+export function mergeIssues(local: TypoIssue[], llm: TypoIssue[], limit = 8): TypoIssue[] {
 	const out = [...local]
 	for (const item of llm) {
 		const s = item.offset

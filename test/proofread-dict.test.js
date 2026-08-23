@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { scanLocalTypos, maskForScan, WRONG_PHRASES } from '../lib/proofread-dict.js'
+import { scanLocalTypos, maskForScan, WRONG_PHRASES } from '../src/proofread-dict.ts'
 
 test('词典本身不包含自映射与非词条', () => {
 	for (const [wrong, right] of Object.entries(WRONG_PHRASES)) {
