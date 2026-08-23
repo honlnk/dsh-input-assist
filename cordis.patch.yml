@@ -1,0 +1,11 @@
+# dsh-input-assist bundle patch: adds the host half to the composition.
+# The host half registers the user-settings namespace `input-assist`
+# (completion / proofread configuration, persisted to <dsh home>/settings.yaml)
+# and owns the loopback RPC channel /input-assist:
+#   config.get / config.set  - read / merge-persist the namespace
+#   complete                 - DeepSeek FIM completion proxy (non-stream v1)
+#   proofread                - local typo dictionary scan + optional LLM check
+- insert:
+    - id: input-assist
+      name: dsh-input-assist
+      inject: [connection]

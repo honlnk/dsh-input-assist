@@ -1,0 +1,53 @@
+{
+	"name": "dsh-input-assist",
+	"version": "0.1.0",
+	"description": "Input assistant for DeepSeek Harness Web UI: inline AI completion (FIM ghost suggestion, Tab to accept) and Chinese-friendly typo checking with click-to-fix.",
+	"type": "module",
+	"main": "lib/index.js",
+	"license": "MIT",
+	"exports": {
+		".": {
+			"default": "./lib/index.js"
+		},
+		"./client": {
+			"default": "./lib/client.js"
+		},
+		"./cordis.patch.yml": "./cordis.patch.yml",
+		"./package.json": "./package.json"
+	},
+	"dsh": {
+		"bundle": {
+			"patch": "./cordis.patch.yml"
+		},
+		"client": {
+			"inject": [
+				"@deepseek-ai/dsh-client-connection",
+				"@deepseek-ai/dsh-client-locale",
+				"@deepseek-ai/dsh-client-runtime",
+				"@deepseek-ai/dsh-api-remotes"
+			],
+			"platform": "web",
+			"immediately": true
+		}
+	},
+	"files": [
+		"lib/",
+		"test/",
+		"cordis.patch.yml",
+		"README.md"
+	],
+	"scripts": {
+		"test": "node --test test/"
+	},
+	"dependencies": {
+		"@deepseek-ai/dsh-settings": "0.1.0-rc.6",
+		"@deepseek-ai/schemastery": "3.18.1"
+	},
+	"peerDependencies": {
+		"@deepseek-ai/cordis": "^4.0.1",
+		"react": "^18.2.0"
+	},
+	"devDependencies": {
+		"@deepseek-ai/cordis": "^4.0.1"
+	}
+}
