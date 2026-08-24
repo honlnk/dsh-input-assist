@@ -1,5 +1,6 @@
 # 部署官网（docs/）到 GitHub Pages。
-# 推送 main 分支的 docs 改动或 v* tag 时触发，部署 docs/ 下的静态站点文件。
+# main 分支的 docs 改动即部署。注意：github-pages 环境的保护规则只允许
+# 默认分支部署，因此不要加 tags 触发（发版不改官网，无需重复部署）。
 #
 # 首次使用前需在 GitHub 仓库 Settings → Pages 里：Source 选 "GitHub Actions"。
 
@@ -11,8 +12,6 @@ on:
     paths:
       - 'docs/**'
       - '.github/workflows/deploy-pages.yml'
-    tags:
-      - 'v*'
   workflow_dispatch:
 
 permissions:
