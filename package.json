@@ -1,6 +1,6 @@
 {
 	"name": "dsh-input-assist",
-	"version": "0.1.0",
+	"version": "0.1.1",
 	"description": "Input assistant for DeepSeek Harness Web UI: inline AI completion (FIM ghost suggestion, Tab to accept) and Chinese-friendly typo checking with click-to-fix.",
 	"type": "module",
 	"main": "lib/index.js",
