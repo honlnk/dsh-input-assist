@@ -1,0 +1,94 @@
+# 发布 npm 包（双名：裸名 dsh-input-assist + 镜像 @honlnk/dsh-input-assist）。
+# 当推送 v* 标签时触发，构建、测试后两个名字各发一份（内容完全相同）。
+# 认证方式：npm Trusted Publishing（OIDC）—— 无需 NPM_TOKEN。
+#
+# 前置（只需配一次，两个包各配一条）：
+#   npmjs.com → 包设置 → Trusted Publishers → 添加：
+#     1. 包名 dsh-input-assist（尚未被占用也可预先声明，占用该名）
+#     2. 包名 @honlnk/dsh-input-assist（scope @honlnk 归 honlnk 所有）
+#   两条都填：org/user=honlnk、repo=dsh-input-assist、
+#   workflow filename=release-npm.yml、environment 留空、Allowed actions 勾选 npm publish。
+#   配好后不再需要任何 token；GITHUB_TOKEN 由 Actions 自动注入。
+#
+# 幂等：版本已在 registry 的名字自动跳过（兼容「先手动发再推 tag」）。
+# 标签版本必须与 package.json version 一致，否则直接失败防止误发。
+
+name: Release npm
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  SCOPED_NAME: '@honlnk/dsh-input-assist'
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # OIDC Trusted Publishing / --provenance 必需
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version (tag must match package.json)
+        id: ver
+        run: |
+          set -e
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            TAG_VERSION="${GITHUB_REF_NAME#v}"
+            if [[ "$TAG_VERSION" != "$PKG_VERSION" ]]; then
+              echo "::error::tag v$TAG_VERSION 与 package.json version $PKG_VERSION 不一致"
+              exit 1
+            fi
+          fi
+          echo "version=$PKG_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Skip names already published
+        id: skip
+        run: |
+          set -e
+          V=${{ steps.ver.outputs.version }}
+          for name in dsh-input-assist "$SCOPED_NAME"; do
+            key=$(echo "$name" | tr '/@-' '___')
+            if npm view "$name@$V" version >/dev/null 2>&1; then
+              echo "$key=true" >> "$GITHUB_OUTPUT"
+              echo "::notice::$name@$V 已存在，跳过该名字"
+            else
+              echo "$key=false" >> "$GITHUB_OUTPUT"
+            fi
+          done
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24' # Trusted Publishing 要求 npm ≥ 11.5.1（Node 24 自带）
+          cache: npm
+          # 不要设 registry-url：会注入 NODE_AUTH_TOKEN，覆盖 OIDC 认证。
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests (build included)
+        run: npm test
+
+      - name: Publish bare name (dsh-input-assist)
+        if: steps.skip.outputs.dsh_input_assist != 'true'
+        # prepack 自动构建；npm CLI 用 OIDC 凭证认证并附带 provenance。
+        run: npm publish --access public
+
+      - name: Publish scoped mirror (@honlnk/dsh-input-assist)
+        if: steps.skip.outputs._honlnk_dsh_input_assist != 'true'
+        run: |
+          node -e "
+            const fs = require('node:fs');
+            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            pkg.name = process.env.SCOPED_NAME;
+            fs.writeFileSync('package.json', JSON.stringify(pkg, null, '\t') + '\n');
+          "
+          npm publish --access public

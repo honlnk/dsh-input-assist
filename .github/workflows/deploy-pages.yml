@@ -1,0 +1,52 @@
+# 部署官网（docs/）到 GitHub Pages。
+# 推送 main 分支的 docs 改动或 v* tag 时触发，部署 docs/ 下的静态站点文件。
+#
+# 首次使用前需在 GitHub 仓库 Settings → Pages 里：Source 选 "GitHub Actions"。
+
+name: Deploy Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - '.github/workflows/deploy-pages.yml'
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+      # 只部署站点文件；docs/ 下的开发记录等 markdown 不进站点。
+      - name: Stage site files
+        run: |
+          mkdir -p _site
+          cp docs/index.html _site/
+          cp docs/robots.txt _site/
+          cp docs/sitemap.xml _site/
+          # 自定义域名（可选）：存在 CNAME 才复制；默认走 honlnk.github.io/dsh-input-assist
+          [ -f docs/CNAME ] && cp docs/CNAME _site/ || true
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

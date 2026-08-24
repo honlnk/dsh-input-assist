@@ -5,6 +5,27 @@
 	"type": "module",
 	"main": "lib/index.js",
 	"license": "MIT",
+	"author": "honlnk",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/honlnk/dsh-input-assist.git"
+	},
+	"homepage": "https://honlnk.github.io/dsh-input-assist/",
+	"bugs": {
+		"url": "https://github.com/honlnk/dsh-input-assist/issues"
+	},
+	"keywords": [
+		"dsh",
+		"dsh-plugin",
+		"dsh-input-assist",
+		"deepseek-harness",
+		"deepseek",
+		"input-completion",
+		"ghost-text",
+		"typo-check",
+		"chinese",
+		"proofreading"
+	],
 	"exports": {
 		".": {
 			"types": "./lib/index.d.ts",
@@ -39,6 +60,7 @@
 	],
 	"scripts": {
 		"build": "tsdown",
+		"typecheck": "tsc --noEmit -p tsconfig.json",
 		"test": "npm run build && node --test test/*.test.js",
 		"prepack": "npm run build"
 	},

@@ -27,10 +27,19 @@ DeepSeek Harness（dsh）输入助手插件：
 ## 快速开始
 
 ```shell
-# 安装到 dsh web profile（已在本机执行过）
-dsh plugin --profile web add /Users/honlnk/project/dsh-input-assist
+dsh plugin --profile web add dsh-input-assist   # 或 @honlnk/dsh-input-assist，内容完全相同
 dsh --profile web          # 启动，打开 http://127.0.0.1:3080
 ```
+
+本地开发（从源码装）：
+
+```shell
+git clone https://github.com/honlnk/dsh-input-assist && cd dsh-input-assist
+npm install && npm run build
+dsh plugin --profile web add "$PWD"
+```
+
+官网（功能演示 + 安装指引）：https://honlnk.github.io/dsh-input-assist/
 
 API key 三选一（补全与 LLM 检查层需要；词典层无需任何配置）：
 
@@ -98,9 +107,22 @@ npm test        # 先 build，再跑 node --test（单测指向 src/*.ts，产�
 - [x] v2 错别字改版（文中红字标注、逐条导航、标记正确、快捷键）
 - [x] v3 NovAI 化改版（ghost text 内联建议、Tab 逐词采纳、词典层下沉浏览器 200ms、LLM/补全统一 800ms）
 - [x] v4 TypeScript 重构（src/ 全量 TS、tsdown 双入口构建、词典单源化、37 测试）
-- [ ] M2.5 真实 key 联调 + 真实 Chrome 中验证点击/快捷键手感
+- [x] v5 CI/CD + 发布（双名 npm 包、Trusted Publishing 免 token、GitHub Pages 官网）
+- [ ] M2.5 真实 Chrome 中验证点击/快捷键手感
 - [ ] M3 流式 / 设置 UI
-- [ ] M4 发布（npm + dsh-plugin topic）
+
+## 发布流程（v5 起）
+
+推 `v*` tag 自动触发（版本号须与 package.json 一致）：
+
+- **Release npm** — 测试通过后双名各发一份：`dsh-input-assist`（裸名）+ `@honlnk/dsh-input-assist`（scope 镜像），内容相同。认证走 npm Trusted Publishing（OIDC），无需 NPM_TOKEN；已发布的名字自动跳过（幂等）。
+- **Deploy Pages** — `docs/` 下的站点文件部署到 GitHub Pages。
+
+前置（一次性）：npmjs.com 上为**两个包名**各配置一条 Trusted Publisher（repo `honlnk/dsh-input-assist`、workflow `release-npm.yml`、environment 留空）；GitHub Settings → Pages → Source 选 "GitHub Actions"。
+
+```shell
+git tag v0.1.0 && git push origin v0.1.0   # 即发布
+```
 
 ## 卸载
 

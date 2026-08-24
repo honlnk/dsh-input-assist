@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>dsh-input-assist — DeepSeek Harness 输入助手：AI 补全 + 错别字检查</title>
+  <meta name="description" content="DeepSeek Harness（dsh）Web UI 输入助手插件：打字停顿后灰色 ghost 建议内联出现在光标后（Tab 逐词采纳），双层中文错别字检查（词典层本地 200ms 零成本 + LLM 上下文校对），文中红字标注、点击修正。" />
+  <meta name="keywords" content="dsh,dsh插件,dsh-input-assist,DeepSeek Harness,deepseek,input completion,ghost text,FIM,错别字检查,中文校对,输入补全,Copilot plugin" />
+  <link rel="canonical" href="https://honlnk.github.io/dsh-input-assist/" />
+  <!-- Open Graph -->
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://honlnk.github.io/dsh-input-assist/" />
+  <meta property="og:site_name" content="dsh-input-assist" />
+  <meta property="og:title" content="dsh-input-assist · DeepSeek Harness 输入助手" />
+  <meta property="og:description" content="灰色 ghost 建议内联在光标后，Tab 逐词采纳；双层中文错别字检查，词典层本地零成本。" />
+  <meta property="og:locale" content="zh_CN" />
+  <!-- Twitter -->
+  <meta name="twitter:card" content="summary" />
+  <meta name="twitter:title" content="dsh-input-assist · DeepSeek Harness 输入助手" />
+  <meta name="twitter:description" content="AI 输入补全（Tab 逐词采纳）+ 双层中文错别字检查。" />
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%234F6EF7'/%3E%3Cpath d='M14 26h36M14 36h24' stroke='white' stroke-width='5' stroke-linecap='round'/%3E%3Cpath d='M44 36l6 6-6 6' fill='none' stroke='%23FFD37A' stroke-width='4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" />
+  <style>
+    :root {
+      --bg: #ffffff;
+      --bg-soft: #f7f8fa;
+      --bg-code: #f3f4f6;
+      --border: #e5e7eb;
+      --text: #1f2328;
+      --text-soft: #57606a;
+      --text-muted: #8b949e;
+      --accent: #4f6ef7;
+      --accent-soft: #eef1fe;
+      --green: #1a7f37;
+      --green-soft: #dafbe1;
+      --orange: #bc4c00;
+      --orange-soft: #fff1e5;
+      --purple: #6f4ed1;
+      --purple-soft: #f1e8ff;
+      --red: #cf222e;
+      --ghost: #8b949e;
+      --shadow: 0 1px 3px rgba(0,0,0,0.04), 0 8px 24px rgba(0,0,0,0.04);
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #0d1117;
+        --bg-soft: #161b22;
+        --bg-code: #1c2128;
+        --border: #30363d;
+        --text: #e6edf3;
+        --text-soft: #9198a1;
+        --text-muted: #6e7681;
+        --accent: #679efe;
+        --accent-soft: #679efe1f;
+        --green: #3fb950;
+        --green-soft: #3fb95022;
+        --orange: #db6d28;
+        --orange-soft: #db6d2822;
+        --purple: #a371f7;
+        --purple-soft: #a371f722;
+        --red: #f85149;
+        --ghost: #6e7681;
+        --shadow: 0 1px 3px rgba(0,0,0,0.3), 0 8px 24px rgba(0,0,0,0.3);
+      }
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      font-size: 16px;
+      line-height: 1.7;
+      color: var(--text);
+      background: var(--bg);
+      -webkit-font-smoothing: antialiased;
+    }
+    code, pre, .mono {
+      font-family: "SFMono-Regular", "JetBrains Mono", Consolas, "Liberation Mono", Menlo, monospace;
+    }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .container { max-width: 920px; margin: 0 auto; padding: 0 24px; }
+
+    /* Header */
+    header {
+      position: sticky; top: 0; z-index: 10;
+      background: color-mix(in srgb, var(--bg) 85%, transparent);
+      backdrop-filter: saturate(180%) blur(12px);
+      -webkit-backdrop-filter: saturate(180%) blur(12px);
+      border-bottom: 1px solid var(--border);
+    }
+    .nav { display: flex; align-items: center; justify-content: space-between; height: 56px; }
+    .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 18px; color: var(--text); }
+    .brand-logo { width: 28px; height: 28px; display: block; }
+    .nav-links { display: flex; gap: 8px; align-items: center; }
+    .nav-links a {
+      color: var(--text-soft); font-size: 14px; padding: 6px 12px;
+      border-radius: 6px; transition: all .15s;
+    }
+    .nav-links a:hover { background: var(--bg-soft); color: var(--text); text-decoration: none; }
+    .btn-github {
+      display: inline-flex; align-items: center; gap: 6px;
+      background: var(--bg-soft); border: 1px solid var(--border);
+      padding: 6px 14px; border-radius: 6px; font-size: 13px; color: var(--text);
+    }
+    .btn-github:hover { background: var(--bg-code); text-decoration: none; }
+
+    /* Hero */
+    .hero { padding: 72px 0 48px; text-align: center; }
+    .hero-badge {
+      display: inline-block; padding: 4px 12px; border-radius: 999px;
+      background: var(--accent-soft); color: var(--accent);
+      font-size: 13px; font-weight: 500; margin-bottom: 22px;
+    }
+    .hero h1 {
+      font-size: 44px; font-weight: 800; letter-spacing: -0.02em;
+      line-height: 1.2; margin: 0 0 16px;
+    }
+    .hero h1 .accent { color: var(--accent); }
+    .hero p { font-size: 18px; color: var(--text-soft); max-width: 640px; margin: 0 auto 28px; }
+    .hero-actions { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+    .btn-primary {
+      display: inline-flex; align-items: center; gap: 8px;
+      background: var(--accent); color: #fff;
+      padding: 10px 22px; border-radius: 8px; font-size: 15px; font-weight: 600;
+      transition: filter .15s;
+    }
+    .btn-primary:hover { filter: brightness(1.08); text-decoration: none; }
+    .btn-secondary {
+      display: inline-flex; align-items: center; gap: 8px;
+      border: 1px solid var(--border); color: var(--text);
+      padding: 10px 22px; border-radius: 8px; font-size: 15px;
+    }
+    .btn-secondary:hover { background: var(--bg-soft); text-decoration: none; }
+
+    /* Demo mock */
+    .demo { margin: 8px auto 0; max-width: 640px; }
+    .demo-card {
+      background: var(--bg-soft); border: 1px solid var(--border);
+      border-radius: 14px; padding: 22px 24px 16px; box-shadow: var(--shadow);
+      text-align: left;
+    }
+    .demo-line { font-size: 16px; line-height: 2; min-height: 32px; }
+    .typo {
+      color: var(--red);
+      text-decoration: underline wavy var(--red) 1px;
+      text-underline-offset: 3px;
+    }
+    .ghost-suggest { color: var(--ghost); }
+    .caret {
+      display: inline-block; width: 2px; height: 1.05em;
+      background: var(--accent); vertical-align: text-bottom;
+      animation: blink 1.1s steps(1) infinite;
+    }
+    @keyframes blink { 50% { opacity: 0; } }
+    .demo-dock {
+      margin-top: 14px; display: flex; align-items: center; gap: 8px;
+      font-size: 12px; color: var(--text-muted); flex-wrap: wrap;
+    }
+    .demo-nav {
+      display: inline-flex; align-items: center; gap: 6px;
+      border: 1px solid var(--border); border-radius: 8px;
+      background: var(--bg); padding: 4px 10px;
+    }
+    .demo-nav .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--red); }
+    .demo-nav .wrong { color: var(--red); text-decoration: line-through; }
+    .demo-nav .right { color: var(--text); font-weight: 500; }
+    .demo-hint { white-space: nowrap; }
+    .kbd {
+      display: inline-block; padding: 1px 7px; border-radius: 5px;
+      border: 1px solid var(--border); border-bottom-width: 2px;
+      background: var(--bg); font-size: 11.5px; color: var(--text-soft);
+      font-family: "SFMono-Regular", Consolas, Menlo, monospace;
+    }
+
+    /* Sections */
+    section { padding: 56px 0; }
+    section.alt { background: var(--bg-soft); }
+    .section-title { font-size: 28px; font-weight: 700; margin: 0 0 8px; text-align: center; }
+    .section-sub { color: var(--text-soft); text-align: center; margin: 0 auto 36px; max-width: 560px; }
+
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+    .card {
+      background: var(--bg); border: 1px solid var(--border);
+      border-radius: 12px; padding: 22px; box-shadow: var(--shadow);
+    }
+    section:not(.alt) .card { background: var(--bg-soft); }
+    .card h3 { margin: 0 0 8px; font-size: 17px; display: flex; align-items: center; gap: 8px; }
+    .card p { margin: 0; color: var(--text-soft); font-size: 14.5px; }
+    .tag {
+      font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px;
+      white-space: nowrap;
+    }
+    .tag-blue { background: var(--accent-soft); color: var(--accent); }
+    .tag-green { background: var(--green-soft); color: var(--green); }
+    .tag-orange { background: var(--orange-soft); color: var(--orange); }
+    .tag-purple { background: var(--purple-soft); color: var(--purple); }
+
+    /* Install */
+    .install-box { max-width: 640px; margin: 0 auto; }
+    .cmd-row {
+      display: flex; align-items: center; gap: 10px;
+      background: var(--bg-code); border: 1px solid var(--border);
+      border-radius: 10px; padding: 12px 16px; margin: 10px 0;
+    }
+    .cmd-row code { flex: 1; font-size: 13.5px; overflow-x: auto; white-space: nowrap; }
+    .cmd-row .prompt { color: var(--green); user-select: none; }
+    .copy-btn {
+      border: 1px solid var(--border); background: var(--bg); color: var(--text-soft);
+      font-size: 12px; padding: 4px 10px; border-radius: 6px; cursor: pointer; white-space: nowrap;
+    }
+    .copy-btn:hover { color: var(--text); }
+    .install-note { font-size: 13.5px; color: var(--text-soft); margin-top: 14px; }
+    .install-note ul { margin: 8px 0 0; padding-left: 20px; }
+    .install-note li { margin: 4px 0; }
+
+    /* Shortcuts table */
+    table { width: 100%; border-collapse: collapse; font-size: 14.5px; }
+    th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--border); }
+    th { color: var(--text-muted); font-weight: 600; font-size: 13px; }
+    td.k { white-space: nowrap; }
+
+    /* FAQ */
+    .faq { max-width: 640px; margin: 0 auto; }
+    .faq details {
+      border: 1px solid var(--border); border-radius: 10px;
+      padding: 14px 18px; margin-bottom: 10px; background: var(--bg);
+    }
+    section.alt .faq details { background: var(--bg-soft); }
+    .faq summary { font-weight: 600; cursor: pointer; font-size: 15px; }
+    .faq details p { color: var(--text-soft); font-size: 14.5px; margin: 10px 0 0; }
+
+    footer {
+      border-top: 1px solid var(--border); padding: 28px 0 40px;
+      color: var(--text-muted); font-size: 13.5px; text-align: center;
+    }
+    footer a { color: var(--text-soft); }
+
+    @media (max-width: 640px) {
+      .hero h1 { font-size: 32px; }
+      .hero p { font-size: 16px; }
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="container nav">
+    <div class="brand">
+      <svg class="brand-logo" viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="14" fill="#4F6EF7"/><path d="M14 26h36M14 36h24" stroke="white" stroke-width="5" stroke-linecap="round"/><path d="M44 36l6 6-6 6" fill="none" stroke="#FFD37A" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      dsh-input-assist
+    </div>
+    <nav class="nav-links">
+      <a href="#features">功能</a>
+      <a href="#install">安装</a>
+      <a href="#shortcuts">快捷键</a>
+      <a href="#faq">FAQ</a>
+      <a class="btn-github" href="https://github.com/honlnk/dsh-input-assist" target="_blank" rel="noopener">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+        GitHub
+      </a>
+    </nav>
+  </div>
+</header>
+
+<div class="hero container">
+  <span class="hero-badge">DeepSeek Harness（dsh）Web UI 插件</span>
+  <h1>打字停一停，<span class="accent">灰色建议</span>就在光标后<br/>错别字<span class="accent" style="color:var(--red)">当场标红</span>，一键修正</h1>
+  <p>输入补全走 DeepSeek FIM 接口，建议内联显示（Copilot 同款手感）；错别字检查分两层——词典层在浏览器本地 200ms 即时标红、零成本，LLM 层做上下文校对。</p>
+  <div class="hero-actions">
+    <a class="btn-primary" href="#install">安装插件</a>
+    <a class="btn-secondary" href="https://github.com/honlnk/dsh-input-assist" target="_blank" rel="noopener">查看源码</a>
+  </div>
+  <div class="demo">
+    <div class="demo-card">
+      <div class="demo-line">今天我<span class="typo">迫不急待</span>地想回家，天气真不错<span class="caret"></span><span class="ghost-suggest">，适合去公园走走</span></div>
+      <div class="demo-dock">
+        <span class="demo-nav"><span class="dot"></span>疑似错别字 <span>1/1</span> <span class="wrong">迫不急待</span>→<span class="right">迫不及待</span> <span>· 通常为「迫不及待」的误写</span></span>
+        <span class="demo-hint"><span class="kbd">Tab</span> 采纳一词 · <span class="kbd">Shift+Tab</span> 全量 · <span class="kbd">Esc</span> 关闭</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<section id="features">
+  <div class="container">
+    <h2 class="section-title">两大功能，都是 additive</h2>
+    <p class="section-sub">不改动 dsh 任何现有交互，只在输入框外侧加功能；输入框内除灰字与红字外保持干净。</p>
+    <div class="grid">
+      <div class="card">
+        <h3>输入补全（ghost text）<span class="tag tag-blue">FIM</span></h3>
+        <p>停笔 800ms 后调用 DeepSeek FIM 接口（<code>/beta/completions</code>），建议以灰字内联在光标后——<span class="kbd">Tab</span> 按中文分词逐词采纳、<span class="kbd">Shift+Tab</span> 全量采纳、<span class="kbd">Esc</span> 关闭。吃光建议后自动续写下一轮，IME 输入期间绝不干扰。</p>
+      </div>
+      <div class="card">
+        <h3>错别字检查<span class="tag tag-green">词典层 · 本地</span><span class="tag tag-purple">LLM 层</span></h3>
+        <p>词典层：约 150 条高置信错词 + 上下文规则，200ms 在浏览器本地标红，离线零成本。LLM 层：在/再、的/得/地这类需要句意的混淆，800ms 与补全同节奏请求。文中红波浪线标注，点红字即选中，绝不全量替换。</p>
+      </div>
+      <div class="card">
+        <h3>逐条导航修正<span class="tag tag-orange">导航条</span></h3>
+        <p>多个错字用 <span class="kbd">Ctrl+Shift+</span><span class="kbd">.</span>/<span class="kbd">,</span> 上下切换，「修正」只替换当前选中的一条；拿不准的可以「标记正确」加入本次忽略名单。位置失配（你已手动改过）的检出自动失效。</p>
+      </div>
+      <div class="card">
+        <h3>成本完全可控<span class="tag tag-green">省钱</span></h3>
+        <p>补/校两个独立开关就在输入框旁。配置 <code>proofreadUseLlm: false</code> 后校对完全不发请求——只剩词典层，分文不花。API key 自动复用 dsh 已保存的 DEEPSEEK_API_KEY，零配置开箱即用。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="install" class="alt">
+  <div class="container">
+    <h2 class="section-title">三步安装</h2>
+    <p class="section-sub">dsh 的 plugin 命令底层走 pnpm，npm 上的两个包名内容完全相同，任选其一。</p>
+    <div class="install-box">
+      <div class="cmd-row"><span class="prompt">$</span><code id="cmd1">dsh plugin --profile web add dsh-input-assist</code><button class="copy-btn" onclick="copyCmd('cmd1', this)">复制</button></div>
+      <div class="cmd-row"><span class="prompt">$</span><code id="cmd2">dsh plugin --profile web add @honlnk/dsh-input-assist</code><button class="copy-btn" onclick="copyCmd('cmd2', this)">复制</button></div>
+      <div class="cmd-row"><span class="prompt">$</span><code>dsh --profile web   # 重启，打开 http://127.0.0.1:3080</code></div>
+      <div class="install-note">
+        API key 三选一（补全与 LLM 校对层需要；词典层无需任何配置）：
+        <ul>
+          <li>什么都不做——自动复用 dsh 已保存的 <code>DEEPSEEK_API_KEY</code> 或环境变量</li>
+          <li><code>~/.dsh/settings.yaml</code> 里写 <code>input-assist.completionApiKey: sk-…</code></li>
+          <li>环境变量 <code>DEEPSEEK_API_KEY=sk-…</code></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="shortcuts">
+  <div class="container">
+    <h2 class="section-title">快捷键</h2>
+    <p class="section-sub">仅在输入框聚焦且对应功能激活时接管；IME 输入法组合期一律放行。</p>
+    <div style="max-width:640px;margin:0 auto">
+      <table>
+        <thead><tr><th>动作</th><th>快捷键</th></tr></thead>
+        <tbody>
+          <tr><td>采纳一词（中文按词切分）</td><td class="k"><span class="kbd">Tab</span></td></tr>
+          <tr><td>全量采纳建议</td><td class="k"><span class="kbd">Shift</span>+<span class="kbd">Tab</span></td></tr>
+          <tr><td>关闭当前建议</td><td class="k"><span class="kbd">Esc</span></td></tr>
+          <tr><td>下一个 / 上一个错字</td><td class="k"><span class="kbd">Ctrl</span>+<span class="kbd">Shift</span>+<span class="kbd">.</span> / <span class="kbd">,</span></td></tr>
+          <tr><td>修正当前选中项</td><td class="k"><span class="kbd">Ctrl</span>+<span class="kbd">Shift</span>+<span class="kbd">F</span></td></tr>
+          <tr><td>标记该处为正确输入</td><td class="k"><span class="kbd">Ctrl</span>+<span class="kbd">Shift</span>+<span class="kbd">G</span></td></tr>
+          <tr><td>本次输入不再提醒</td><td class="k"><span class="kbd">Esc</span>（无建议时）</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section id="faq" class="alt">
+  <div class="container">
+    <h2 class="section-title">常见问题</h2>
+    <div class="faq">
+      <details>
+        <summary>会产生多少费用？</summary>
+        <p>补全：每次请求上限 64 token；LLM 校对：单次上限 800 token、temperature 0。停笔 800ms 防抖内多次击键只发一次。把 <code>proofreadUseLlm</code> 关掉后校对层零成本（只剩本地词典）。deepseek-chat 单价下日常使用的花费可以忽略。</p>
+      </details>
+      <details>
+        <summary>我的输入内容会被发送到哪里？</summary>
+        <p>只有当前输入框草稿文本会发送给 DeepSeek API（补全发光标前缀，校对发整段草稿）；词典层检查完全在浏览器本地完成。插件本身不收集任何数据，也没有统计上报。</p>
+      </details>
+      <details>
+        <summary>代码块、链接里的错词会误报吗？</summary>
+        <p>不会。扫描前会把行内代码、围栏代码块和 URL 用等长占位符掩码，词典层永不标记其中的内容；LLM 层的提名也要经过位置回验，对不上当前草稿的检出直接失效。</p>
+      </details>
+      <details>
+        <summary>支持哪些 dsh 版本？</summary>
+        <p>基于 dsh 0.1.1-rc.2 的双侧插件契约开发（slots 注入 + loopback RPC）。插件接口处于 rc 阶段，dsh 大版本升级后如遇不兼容请提 <a href="https://github.com/honlnk/dsh-input-assist/issues" target="_blank" rel="noopener">issue</a>。</p>
+      </details>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="container">
+    <p>MIT License · <a href="https://github.com/honlnk/dsh-input-assist" target="_blank" rel="noopener">GitHub</a> · npm: <a href="https://www.npmjs.com/package/dsh-input-assist" target="_blank" rel="noopener">dsh-input-assist</a> / <a href="https://www.npmjs.com/package/@honlnk/dsh-input-assist" target="_blank" rel="noopener">@honlnk/dsh-input-assist</a></p>
+    <p>by <a href="https://github.com/honlnk" target="_blank" rel="noopener">honlnk</a></p>
+  </div>
+</footer>
+
+<script>
+  function copyCmd(id, btn) {
+    navigator.clipboard.writeText(document.getElementById(id).textContent).then(function () {
+      var old = btn.textContent;
+      btn.textContent = '已复制';
+      setTimeout(function () { btn.textContent = old; }, 1400);
+    });
+  }
+</script>
+
+</body>
+</html>
