@@ -4,8 +4,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>dsh-input-assist — DeepSeek Harness 输入助手：AI 补全 + 错别字检查</title>
-  <meta name="description" content="DeepSeek Harness（dsh）Web UI 输入助手插件：打字停顿后灰色 ghost 建议内联出现在光标后（Tab 逐词采纳），双层中文错别字检查（词典层本地 200ms 零成本 + LLM 上下文校对），文中红字标注、点击修正。" />
-  <meta name="keywords" content="dsh,dsh插件,dsh-input-assist,DeepSeek Harness,deepseek,input completion,ghost text,FIM,错别字检查,中文校对,输入补全,Copilot plugin" />
+  <meta name="description" content="DeepSeek Harness（dsh）Web UI 输入助手插件：打字停顿后灰色 ghost 建议内联出现在光标后（Tab 逐词采纳），中英混排错别字检查（词典层本地 200ms 零成本 + LLM 上下文校对，含英文拼写与专有名词大小写），文中红字标注、点击修正，支持浏览器本地自定义词库。" />
+  <meta name="keywords" content="dsh,dsh插件,dsh-input-assist,DeepSeek Harness,deepseek,input completion,ghost text,FIM,错别字检查,中文校对,英文拼写检查,拼写检查,spell check,输入补全,Copilot plugin" />
   <link rel="canonical" href="https://dsh-input-assist.honlnk.com/" />
   <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
   <meta name="theme-color" content="#0d1117" media="(prefers-color-scheme: dark)" />
@@ -14,12 +14,12 @@
   <meta property="og:url" content="https://dsh-input-assist.honlnk.com/" />
   <meta property="og:site_name" content="dsh-input-assist" />
   <meta property="og:title" content="dsh-input-assist · DeepSeek Harness 输入助手" />
-  <meta property="og:description" content="灰色 ghost 建议内联在光标后，Tab 逐词采纳；双层中文错别字检查，词典层本地零成本。" />
+  <meta property="og:description" content="灰色 ghost 建议内联在光标后，Tab 逐词采纳；中英混排错别字检查（含英文拼写），词典层本地零成本，支持自定义词库。" />
   <meta property="og:locale" content="zh_CN" />
   <!-- Twitter -->
   <meta name="twitter:card" content="summary" />
   <meta name="twitter:title" content="dsh-input-assist · DeepSeek Harness 输入助手" />
-  <meta name="twitter:description" content="AI 输入补全（Tab 逐词采纳）+ 双层中文错别字检查。" />
+  <meta name="twitter:description" content="AI 输入补全（Tab 逐词采纳）+ 中英混排错别字检查 + 浏览器本地自定义词库。" />
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%234F6EF7'/%3E%3Cpath d='M14 26h36M14 36h24' stroke='white' stroke-width='5' stroke-linecap='round'/%3E%3Cpath d='M44 36l6 6-6 6' fill='none' stroke='%23FFD37A' stroke-width='4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" />
   <!-- 结构化数据：软件条目 + FAQ 富摘录 -->
   <script type="application/ld+json">
@@ -33,7 +33,7 @@
         "operatingSystem": "macOS, Linux, Windows",
         "softwareVersion": "0.2.0",
         "url": "https://dsh-input-assist.honlnk.com/",
-        "description": "DeepSeek Harness（dsh）Web UI 输入助手插件：AI 输入补全（ghost text，Tab 逐词采纳）与双层中文错别字检查（本地词典 + LLM 上下文校对），带图形化设置页。",
+        "description": "DeepSeek Harness（dsh）Web UI 输入助手插件：AI 输入补全（ghost text，Tab 逐词采纳）与中英混排错别字检查（本地词典 + LLM 上下文校对，含英文拼写与专有名词大小写），带图形化设置页与浏览器本地自定义词库。",
         "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
         "license": "https://opensource.org/licenses/MIT",
         "author": { "@type": "Person", "name": "honlnk", "url": "https://github.com/honlnk" },
@@ -56,6 +56,11 @@
             "@type": "Question",
             "name": "代码块、链接里的错词会误报吗？",
             "acceptedAnswer": { "@type": "Answer", "text": "不会。扫描前会把行内代码、围栏代码块和 URL 用等长占位符掩码，词典层永不标记其中的内容；LLM 层的提名也要经过位置回验，对不上当前草稿的检出直接失效。" }
+          },
+          {
+            "@type": "Question",
+            "name": "能添加自己的错词吗？",
+            "acceptedAnswer": { "@type": "Answer", "text": "能。设置卡片底部「自定义词库（仅本浏览器）」一行一条「错词 => 正词」，中英文皆可，与内置词库合并参与本地检查；同名错词覆盖内置项，写成自映射（错词 => 错词）可禁用某个内置词。英文词条自动走词边界匹配，驼峰、snake_case 这类标识符不会误报。数据只存在本浏览器 localStorage。" }
           },
           {
             "@type": "Question",
@@ -313,16 +318,16 @@
 <div class="hero container">
   <span class="hero-badge">DeepSeek Harness（dsh）Web UI 插件</span>
   <h1>打字停一停，<span class="accent">灰色建议</span>就在光标后<br/>错别字<span class="accent" style="color:var(--red)">当场标红</span>，一键修正</h1>
-  <p>输入补全走 DeepSeek FIM 接口，建议内联显示（Copilot 同款手感）；错别字检查分两层——词典层在浏览器本地 200ms 即时标红、零成本，LLM 层做上下文校对。</p>
+  <p>输入补全走 DeepSeek FIM 接口，建议内联显示（Copilot 同款手感）；错别字检查分两层——词典层在浏览器本地 200ms 即时标红、零成本，中文错词、英文拼写（github→GitHub）都查，LLM 层做上下文校对。</p>
   <div class="hero-actions">
     <a class="btn-primary" href="#install">安装插件</a>
     <a class="btn-secondary" href="https://github.com/honlnk/dsh-input-assist" target="_blank" rel="noopener">查看源码</a>
   </div>
   <div class="demo">
     <div class="demo-card">
-      <div class="demo-line">今天我<span class="typo">迫不急待</span>地想回家，天气真不错<span class="caret"></span><span class="ghost-suggest">，适合去公园走走</span></div>
+      <div class="demo-line">这个 bug 我 <span class="typo">recieve</span> 不到日志，改完<span class="typo">一如继往</span>地没生效<span class="caret"></span><span class="ghost-suggest">，看来得重启一下服务再试试</span></div>
       <div class="demo-dock">
-        <span class="demo-nav"><span class="dot"></span>疑似错别字 <span>1/1</span> <span class="wrong">迫不急待</span>→<span class="right">迫不及待</span> <span>· 通常为「迫不及待」的误写</span></span>
+        <span class="demo-nav"><span class="dot"></span>疑似错别字 <span>1/2</span> <span class="wrong">recieve</span>→<span class="right">receive</span> <span>· 应为「receive」</span></span>
         <span class="demo-hint"><span class="kbd">Tab</span> 采纳一词 · <span class="kbd">Shift+Tab</span> 全量 · <span class="kbd">Esc</span> 关闭</span>
       </div>
     </div>
@@ -340,7 +345,7 @@
       </div>
       <div class="card">
         <h3>错别字检查<span class="tag tag-green">词典层 · 本地</span><span class="tag tag-purple">LLM 层</span></h3>
-        <p>词典层：228 条高置信错词 + 8 条上下文规则（词库在仓库 <code>data/</code> 下纯文本维护），200ms 在浏览器本地标红，离线零成本。LLM 层：在/再、的/得/地这类需要句意的混淆，800ms 与补全同节奏请求。文中红波浪线标注，点红字即选中，绝不全量替换。</p>
+        <p>词典层：228 条中文错词 + 211 条英文错拼/专名大小写 + 8 条上下文规则（词库在仓库 <code>data/</code> 下纯文本维护），200ms 在浏览器本地标红，离线零成本。LLM 层：在/再、的/得/地及中英混排里的英文拼写，800ms 与补全同节奏请求。文中红波浪线标注，点红字即选中，绝不全量替换。</p>
       </div>
       <div class="card">
         <h3>逐条导航修正<span class="tag tag-orange">导航条</span></h3>
@@ -351,7 +356,7 @@
         <p>补/校两个独立开关就在输入框旁。在设置卡片里关掉 LLM 层后校对完全不发请求——只剩词典层，分文不花。API key 自动复用 dsh 已保存的 DEEPSEEK_API_KEY，零配置开箱即用。</p>
       </div>
       <div class="card">
-        <h3>图形化设置页<span class="tag tag-blue">v0.2</span></h3>
+        <h3>图形化设置页<span class="tag tag-blue">免手改配置</span></h3>
         <p>设置 → 插件 → 插件配置，与官方插件同款的配置卡片：11 项配置全部图形化编辑，改完统一保存，数字与必填本地校验。模型字段点开下拉即拉取官方最新模型目录点选即填——不用再手改 <code>settings.yaml</code>（改文件也能热同步）。</p>
       </div>
       <div class="card">
@@ -421,7 +426,7 @@
       </details>
       <details>
         <summary>能添加自己的错词吗？</summary>
-        <p>能。设置卡片底部「自定义词库（仅本浏览器）」一行一条「错词 =&gt; 正词」，与内置词库合并参与本地检查；同名错词覆盖内置项，写成自映射（错词 =&gt; 错词）可禁用某个内置词。数据只存在本浏览器 localStorage，换设备直接复制文本粘贴过去即可。</p>
+        <p>能。设置卡片底部「自定义词库（仅本浏览器）」一行一条「错词 =&gt; 正词」，中英文皆可，与内置词库合并参与本地检查；同名错词覆盖内置项，写成自映射（错词 =&gt; 错词）可禁用某个内置词。英文词条自动走词边界匹配，驼峰、snake_case 这类标识符不会误报。数据只存在本浏览器 localStorage，换设备直接复制文本粘贴过去即可。</p>
       </details>
       <details>
         <summary>支持哪些 dsh 版本？</summary>
