@@ -23,6 +23,7 @@
 
 import {
 	WRONG_PHRASES,
+	EN_PHRASES,
 	CONTEXT_RULE_SPECS,
 } from './proofread-dict-data.generated.ts'
 
@@ -49,9 +50,11 @@ export function applyTemplate(tpl: string, m: RegExpExecArray): string {
 	return tpl.replace(/\$(\d+)/g, (_, d: string) => m[Number(d)] ?? '')
 }
 
-/** A scan-ready dictionary: word map + context rules. */
+/** A scan-ready dictionary: Chinese word map + English token map + context rules. */
 export interface DictBundle {
 	phrases: Record<string, string>
+	/** 英文表：全小写独立词 → 正确拼法/官方大小写（词边界匹配）。 */
+	enPhrases: Record<string, string>
 	rules: readonly ContextRule[]
 }
 
@@ -66,6 +69,7 @@ function buildBuiltinRules(specs: readonly { regex: RegExp; fixTemplate: string;
 /** Builtin dictionary (data/ via gen-dict). Shared by both halves. */
 export const BUILTIN_DICT: DictBundle = {
 	phrases: WRONG_PHRASES,
+	enPhrases: EN_PHRASES,
 	rules: buildBuiltinRules(CONTEXT_RULE_SPECS),
 }
 
@@ -114,11 +118,19 @@ export function parseDictText(text: string): { phrases: Record<string, string>; 
 /**
  * Merge a user word map over a bundle: same-wrong-word entries override the
  * builtin ones; self-mappings survive here and are skipped at scan time
- * (that is how a user disables a builtin entry).
+ * (that is how a user disables a builtin entry). Latin-only lowercase keys
+ * route into the English token table, everything else into the Chinese one —
+ * so user dictionaries natively support `teh => that`-style entries too.
  */
 export function mergeDicts(builtin: DictBundle, user?: Record<string, string>): DictBundle {
 	if (user === undefined) return builtin
-	return { phrases: { ...builtin.phrases, ...user }, rules: builtin.rules }
+	const phrases: Record<string, string> = { ...builtin.phrases }
+	const enPhrases: Record<string, string> = { ...builtin.enPhrases }
+	for (const [wrong, right] of Object.entries(user)) {
+		if (/^[a-z]+$/.test(wrong)) enPhrases[wrong] = right
+		else phrases[wrong] = right
+	}
+	return { phrases, enPhrases, rules: builtin.rules }
 }
 
 /**
@@ -146,6 +158,15 @@ export function maskForScan(text: string): string {
 }
 
 /**
+ * English token: a run of lowercase letters whose neighbours are NOT
+ * word characters or dots. This deliberately skips camelCase / snake_case /
+ * dotted identifiers (myRecieveFunc, user_recieve, obj.recieve, node.js) and
+ * any capitalised form — only plain lowercase prose words are checked, which
+ * is what keeps the zero-false-positive bar. Must run on the masked text.
+ */
+const EN_TOKEN = /(?<![\w.])[a-z]+(?![\w.])/g
+
+/**
  * Core scan against an explicit dictionary bundle.
  * @param {string} text
  * @param {DictBundle} dict
@@ -170,6 +191,23 @@ export function scanWithDict(text: string, dict: DictBundle, limit = 8): TypoIss
 				source: 'dict',
 			})
 			idx = masked.indexOf(wrong, idx + wrong.length)
+		}
+	}
+	const enMap = new Map(Object.entries(dict.enPhrases))
+	if (enMap.size > 0) {
+		EN_TOKEN.lastIndex = 0
+		let m
+		while ((m = EN_TOKEN.exec(masked)) !== null) {
+			const fix = enMap.get(m[0])
+			if (fix !== undefined && fix !== m[0]) {
+				found.push({
+					orig: m[0],
+					fix,
+					offset: m.index,
+					reason: `应为「${fix}」`,
+					source: 'dict',
+				})
+			}
 		}
 	}
 	for (const rule of dict.rules) {

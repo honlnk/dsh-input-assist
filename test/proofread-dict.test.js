@@ -105,3 +105,46 @@ test('重叠命中保留更长匹配', () => {
 	assert.equal(issues.filter((i) => i.orig.includes('燥')).length, 1)
 	assert.equal(issues[0].orig, '心浮气燥')
 })
+
+// —— 英文拼写（全小写独立词，词边界匹配） ——
+test('英文错拼与专名大小写检出，offset 对齐', () => {
+	const issues = scanLocalTypos('I recieve teh message from github today')
+	const hits = issues.map((i) => `${i.orig}→${i.fix}`)
+	assert.deepEqual(hits, ['recieve→receive', 'teh→the', 'github→GitHub'])
+	assert.equal(issues[0].offset, 2)
+	assert.equal(issues[1].offset, 10)
+	assert.equal(issues[2].offset, 27)
+})
+
+test('中英混排：中文错词与英文错拼同句各自检出', () => {
+	const hits = scanLocalTypos('这个帐号的密码我 recieve 不到').map((i) => `${i.orig}→${i.fix}`)
+	assert.deepEqual(hits, ['帐号→账号', 'recieve→receive'])
+})
+
+test('驼峰/下划线/点号/数字连接的 token 不查（标识符保护）', () => {
+	assert.equal(scanLocalTypos('myRecieveFunc 返回了 user_recieve 与 obj.recieve').length, 0)
+	assert.equal(scanLocalTypos('调用 utf8recieve 与 v2recieve 接口').length, 0)
+})
+
+test('大写形式不查（句首/全大写为词典层盲区，由 LLM 层兜底）', () => {
+	assert.equal(scanLocalTypos('Recieve it now').length, 0)
+	assert.equal(scanLocalTypos('TEH MESSAGE').length, 0)
+	assert.equal(scanLocalTypos('Github is great').length, 0)
+})
+
+test('不在词典里的英文词与常见缩写不误报', () => {
+	assert.equal(scanLocalTypos('run kubectl apply and grep -r ok id tmp cfg api').length, 0)
+	assert.equal(scanLocalTypos('this word is straneg but unknown').length, 0) // 未收录错拼不报
+})
+
+test('alot 修正为两个词', () => {
+	const hit = scanLocalTypos('I alot of things')[0]
+	assert.equal(hit.orig, 'alot')
+	assert.equal(hit.fix, 'a lot')
+})
+
+test('代码与 URL 内的英文错拼不检（掩码复用）', () => {
+	const issues = scanLocalTypos('看 `defualt` 代码与 https://x.com/recieve 链接，正文里的 defualt 要检')
+	const hits = issues.filter((i) => i.orig === 'defualt')
+	assert.equal(hits.length, 1)
+})

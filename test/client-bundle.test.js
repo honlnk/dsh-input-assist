@@ -105,6 +105,17 @@ test('data/ 词库条目端到端进 bundle 并可检出（data → gen-dict →
 	assert.equal(issues[0].fix, right)
 })
 
+test('data/ 英文错拼条目端到端进 bundle（词边界匹配生效）', () => {
+	const first = readFileSync(join(here, '../data/en-wrong-spellings.txt'), 'utf8')
+		.split(/\r?\n/)
+		.find((l) => l.trim() !== '' && !l.trim().startsWith('#'))
+	const [wrong, right] = first.split('=>').map((s) => s.trim())
+	const issues = bundleScan(`plain word ${wrong} here, but camel${wrong}Case not flagged`)
+	const hits = issues.filter((i) => i.orig === wrong)
+	assert.equal(hits.length, 1)
+	assert.equal(hits[0].fix, right)
+})
+
 test('词典命中：错词映射与 offset', () => {
 	const issues = bundleScan('我迫不急待地想看看这个结果')
 	assert.equal(issues.length, 1)

@@ -1,0 +1,23 @@
+# 英文专有名词大小写词库（内置）—— 全小写写法 => 官方拼法
+# 收录纪律：仅收「小写写法不构成任何合法英文词」的专名（python/docker/
+# react/windows 等有普通词义的一律不收，守住零误报）。官方接受小写的
+# 惯例名（npm、nginx、vscode）不收。
+# 扫描规则：只匹配全小写独立词；token 化天然排除 node.js 这类带点写法。
+
+chatgpt => ChatGPT
+deepseek => DeepSeek
+gitlab => GitLab
+github => GitHub
+graphql => GraphQL
+javascript => JavaScript
+kubernetes => Kubernetes
+linux => Linux
+macos => macOS
+mongodb => MongoDB
+mysql => MySQL
+nodejs => Node.js
+openai => OpenAI
+postgresql => PostgreSQL
+sqlite => SQLite
+typescript => TypeScript
+websocket => WebSocket

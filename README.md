@@ -3,7 +3,7 @@
 DeepSeek Harness（dsh）输入助手插件：
 
 - **输入补全（ghost text）** — 打字停顿后调用 DeepSeek FIM 接口（`/beta/completions`），灰色建议**内联在光标后**（NovAI 同款：镜像层透明占位 + 灰字），`Tab` 逐词采纳、`Shift+Tab` 全量采纳、`Esc` 关闭
-- **错别字检查** — 双层检测：**词典层在浏览器本地运行**（228 条错词 + 8 条上下文规则，词库数据在 `data/` 下纯文本维护，可叠加浏览器本地自定义词库；200ms 即时标红、离线零成本）+ LLM 上下文校对（在/再、的/得/地等，800ms 防抖与补全同节奏）。**文中红字标注**（红色波浪线，当前项高亮，点红字选中），导航条逐条修正，绝不全量替换
+- **错别字检查** — 双层检测：**词典层在浏览器本地运行**（228 条中文错词 + 211 条英文错拼/专名大小写 + 8 条上下文规则，词库数据在 `data/` 下纯文本维护，可叠加浏览器本地自定义词库；200ms 即时标红、离线零成本）+ LLM 上下文校对（中英混排：在/再、的/得/地及英文拼写，800ms 防抖与补全同节奏）。**文中红字标注**（红色波浪线，当前项高亮，点红字选中），导航条逐条修正，绝不全量替换
 
 ## 补全快捷键（建议灰字出现时生效）
 
@@ -49,21 +49,22 @@ API key 三选一（补全与 LLM 检查层需要；词典层无需任何配置�
 
 ## 设置页卡片
 
-v5.1 起所有配置都可在 dsh 设置界面图形化修改：侧边栏底部齿轮 → **Plugins → 插件配置**，找「输入助手」卡片展开即可。交互与官方兄弟卡片（Bash / Agent Loop / Web Search）同构：暂存编辑 → 统一「保存 / 放弃修改」，数字与必填文本本地校验，字段行带「未保存」蓝点与单项撤销（×）。卡片注册走官方 `settings.plugin.item` 插槽（keyed by 设置命名空间），无需新增任何服务依赖；设置文件外部修改仍会热同步进卡片。
+所有配置都可在 dsh 设置界面图形化修改：侧边栏底部齿轮 → **Plugins → 插件配置**，找「输入助手」卡片展开即可。交互与官方兄弟卡片（Bash / Agent Loop / Web Search）同构：暂存编辑 → 统一「保存 / 放弃修改」，数字与必填文本本地校验，字段行带「未保存」蓝点与单项撤销（×）。卡片注册走官方 `settings.plugin.item` 插槽（keyed by 设置命名空间），无需新增任何服务依赖；设置文件外部修改仍会热同步进卡片。
 
-模型字段支持**从 API 拉取目录**（v5.2）：点字段旁的 ▾ 方块按钮打开自定义下拉面板，每次打开都自动拉取最新目录，点选即填入；输入框始终是自由文本，任何 OpenAI 兼容端点的自定义模型名都可手填。拉取失败（未配 key、端点不可达）自动退回手填。默认模型已跟随官方迁移：`deepseek-chat` 于 2026-07-24 停用，现为 `deepseek-flash`（V4.1 Flash）。
+模型字段支持**从 API 拉取目录**：点字段旁的 ▾ 方块按钮打开自定义下拉面板，每次打开都自动拉取最新目录，点选即填入；输入框始终是自由文本，任何 OpenAI 兼容端点的自定义模型名都可手填。拉取失败（未配 key、端点不可达）自动退回手填。默认模型已跟随官方迁移：`deepseek-chat` 于 2026-07-24 停用，现为 `deepseek-flash`（V4.1 Flash）。
 
 ## 自定义词库（仅本浏览器）
 
-设置页卡片底部「**自定义词库（仅本浏览器）**」区块可维护你自己的错词表，语法一行一条（与内置词库同款）：
+设置页卡片底部「**自定义词库（仅本浏览器）**」区块可维护你自己的错词表，语法一行一条（与内置词库同款），中英文皆可：
 
 ```
 # 注释行
 我的错词 => 正确写法
+teh => that              # 英文词条同样支持（全小写独立词匹配）
 迫不急待 => 迫不急待   # 自映射 = 不再检查该词（禁用内置词）
 ```
 
-- 与内置词库**合并**参与词典层本地扫描：同名错词覆盖内置项；自映射禁用该词
+- 与内置词库**合并**参与词典层本地扫描：同名错词覆盖内置项；自映射禁用该词；英文词条自动走词边界匹配（驼峰、snake_case、点号连接的标识符不会误报）
 - 仅存本浏览器 localStorage（key `dsh-input-assist:user-dict:v1`），**不随 settings.yaml 同步**；换浏览器直接复制文本粘贴即可迁移
 - 上限 2000 条、单条错词 ≤ 16 字，非法行保存时标行号；保存成功后当前草稿立即按新词库重新标红
 
@@ -96,7 +97,7 @@ npm run build   # tsdown 双入口构建，产物落 lib/（不含 tsc 严格检
 npm test        # build → tsc --noEmit → node --test（类型错在本地即拦截）
 ```
 
-词库数据在 `data/` 下纯文本维护（`zh-wrong-phrases.txt` 行式词库 + `zh-context-rules.json` 上下文规则），构建前由 `scripts/gen-dict.mjs` 解析校验并生成 `src/proofread-dict-data.generated.ts`（提交进 git，CI 用 `gendict + git diff` 守卫同步）——更新词库只改 data/ 文件，`npm run build` 自动生效。`test/client-bundle.test.js` 用假 ModuleLoader 真正执行 bundle 产物，验证 data → bundle 全链路；用户自定义词库（localStorage）在浏览器侧与内置词库合并扫描。
+词库数据在 `data/` 下纯文本维护（`zh-wrong-phrases.txt` + `en-wrong-spellings.txt` + `en-proper-nouns.txt` 行式词库 + `zh-context-rules.json` 上下文规则），构建前由 `scripts/gen-dict.mjs` 解析校验并生成 `src/proofread-dict-data.generated.ts`（提交进 git，CI 用 `gendict + git diff` 守卫同步）——更新词库只改 data/ 文件，`npm run build` 自动生效。`test/client-bundle.test.js` 用假 ModuleLoader 真正执行 bundle 产物，验证 data → bundle 全链路；用户自定义词库（localStorage）在浏览器侧与内置词库合并扫描。
 
 ## 文档
 
@@ -109,6 +110,7 @@ npm test        # build → tsc --noEmit → node --test（类型错在本地即
 - [docs/07-模型目录拉取与默认模型迁移.md](./docs/07-模型目录拉取与默认模型迁移.md) — 模型目录拉取：models.list RPC、datalist 组合框、默认模型迁移 deepseek-flash
 - [docs/08-词库外置与自定义词库-开发计划.md](./docs/08-词库外置与自定义词库-开发计划.md) — 词库数据外置 + 用户自定义词库（localStorage）开发计划
 - [docs/09-词库外置与自定义词库-实施记录.md](./docs/09-词库外置与自定义词库-实施记录.md) — 词库外置实施记录：data/ + gen-dict 生成器、合并扫描语义、设置卡片词库区块
+- [docs/10-英文拼写检查-实施记录.md](./docs/10-英文拼写检查-实施记录.md) — 英文拼写检查实施记录：错拼/专名词典、词边界扫描、LLM 层中英混排
 
 ## 架构一览
 
@@ -126,20 +128,19 @@ npm test        # build → tsc --noEmit → node --test（类型错在本地即
 ## 状态
 
 - [x] 调研与可行性（2026-08-23）
-- [x] M0 双侧插件脚手架
-- [x] M1 补全建议条（Tab 采纳 / Esc 关闭 / IME 安全）
-- [x] M2 错别字检查（词典 + LLM 双层，点击修正）
-- [x] v2 错别字改版（文中红字标注、逐条导航、标记正确、快捷键）
-- [x] v3 NovAI 化改版（ghost text 内联建议、Tab 逐词采纳、词典层下沉浏览器 200ms、LLM/补全统一 800ms）
-- [x] v4 TypeScript 重构（src/ 全量 TS、tsdown 双入口构建、词典单源化、37 测试）
-- [x] v5 CI/CD + 发布（双名 npm 包、Trusted Publishing 免 token、GitHub Pages 官网）
-- [x] v5.1 设置页卡片（Settings → Plugins → 插件配置：11 项配置暂存编辑、保存/放弃、本地校验）
-- [x] v5.2 模型目录拉取（models.list RPC + 下拉建议组合框；默认模型 deepseek-chat → deepseek-flash）
-- [x] v6 词库外置与自定义词库（data/ 纯文本词库 + gen-dict 生成器 + CI 同步守卫；浏览器 localStorage 自定义词库、设置卡片区块编辑）
-- [ ] M2.5 真实 Chrome 中验证点击/快捷键手感（含设置卡片与自定义词库区块视觉交互）
-- [ ] M3 流式中途取消
+- [x] 首版实施：双侧插件脚手架 + 补全建议条 + 错别字检查（词典 + LLM 双层，点击修正）
+- [x] 错别字改版（文中红字标注、逐条导航、标记正确、快捷键）
+- [x] 内联补全改版（ghost text、Tab 逐词采纳、词典层下沉浏览器 200ms、LLM/补全统一 800ms）
+- [x] TypeScript 重构（src/ 全量 TS、tsdown 双入口构建、词典单源化）
+- [x] CI/CD 与发布（双名 npm 包、Trusted Publishing 免 token、GitHub Pages 官网）
+- [x] 设置页卡片（Settings → Plugins → 插件配置：11 项配置暂存编辑、保存/放弃、本地校验）
+- [x] 模型目录拉取（models.list RPC + 下拉建议组合箱；默认模型迁移 deepseek-flash）
+- [x] 词库外置与自定义词库（data/ 纯文本词库 + gen-dict 生成器 + CI 同步守卫；浏览器 localStorage 自定义词库、设置卡片区块编辑）
+- [x] 英文拼写检查（错拼 + 专名大小写词典、词边界扫描；LLM 层中英混排校对）
+- [ ] 真实 Chrome 手感验收：快捷键实测（点击、设置卡片、词库区块已于 2026-09-12 dsh 真机验证）
+- [ ] 流式中途取消
 
-## 发布流程（v5 起）
+## 发布流程
 
 推 `v*` tag 自动触发（版本号须与 package.json 一致）：
 

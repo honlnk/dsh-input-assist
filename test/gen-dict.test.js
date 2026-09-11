@@ -33,6 +33,17 @@ test('parsePhrases：非法形态一律抛错并带行号', () => {
 	}
 })
 
+test('parsePhrases 英文模式：大写/混合字符错拼抛错，含空格正词放行', () => {
+	const opts = { english: true }
+	assert.throws(() => parsePhrases('Teh => the', 'en.txt', opts), /全小写/)
+	assert.throws(() => parsePhrases('recieveX => receive', 'en.txt', opts), /全小写/)
+	assert.throws(() => parsePhrases('a-b => ab', 'en.txt', opts), /全小写/)
+	assert.throws(() => parsePhrases('alot => a  lot', 'en.txt', opts), /空白/) // 连续空格
+	assert.deepEqual(parsePhrases('alot => a lot', 'en.txt', opts), [['alot', 'a lot']])
+	assert.throws(() => parsePhrases('teh => teh', 'en.txt', opts), /自映射/)
+	assert.throws(() => parsePhrases('teh => the\nteh => the', 'en.txt', opts), /重复错词/)
+})
+
 test('parseRules：组号越界/坏正则/flags 缺 g 抛错', () => {
 	assert.throws(() => parseRules([{ pattern: '登陆(系统)', fix: '登录$2', reason: 'x' }]), /越界/)
 	assert.throws(() => parseRules([{ pattern: '(', fix: 'x', reason: 'x' }]), /合法正则/)
@@ -49,19 +60,29 @@ test('parseRules：组号越界/坏正则/flags 缺 g 抛错', () => {
 })
 
 test('generate：输出形状（头注释/导出/闭括号）与幂等', () => {
-	const out1 = generate([['帐号', '账号']], [{ regex: '/好象/g', fixTemplate: '好像', reason: 'r' }])
-	const out2 = generate([['帐号', '账号']], [{ regex: '/好象/g', fixTemplate: '好像', reason: 'r' }])
+	const en = [
+		['teh', 'the'],
+		['github', 'GitHub'],
+	]
+	const out1 = generate([['帐号', '账号']], [{ regex: '/好象/g', fixTemplate: '好像', reason: 'r' }], en)
+	const out2 = generate([['帐号', '账号']], [{ regex: '/好象/g', fixTemplate: '好像', reason: 'r' }], en)
 	assert.equal(out1, out2)
 	assert.ok(out1.includes('勿手改'))
 	assert.ok(out1.includes("'帐号': '账号',"))
+	assert.ok(out1.includes("'teh': 'the',"))
+	assert.ok(out1.includes("'github': 'GitHub',"))
 	assert.ok(out1.includes('regex: /好象/g'))
 	assert.ok(out1.trimEnd().endsWith(']'))
 })
 
 test('同步守卫：data/ 当前内容重新生成 == 入库的 generated.ts', () => {
 	const phrases = parsePhrases(read('../data/zh-wrong-phrases.txt'))
+	const enSpell = parsePhrases(read('../data/en-wrong-spellings.txt'), 'en-wrong-spellings.txt', { english: true })
+	const enProper = parsePhrases(read('../data/en-proper-nouns.txt'), 'en-proper-nouns.txt', { english: true })
 	const rules = parseRules(JSON.parse(read('../data/zh-context-rules.json')))
 	assert.ok(phrases.length > 200, `词库条数异常：${phrases.length}`)
+	assert.ok(enSpell.length > 150, `英文错拼条数异常：${enSpell.length}`)
+	assert.ok(enProper.length > 10, `专名条数异常：${enProper.length}`)
 	assert.equal(rules.length, 8)
-	assert.equal(generate(phrases, rules), read('../src/proofread-dict-data.generated.ts'))
+	assert.equal(generate(phrases, rules, [...enSpell, ...enProper]), read('../src/proofread-dict-data.generated.ts'))
 })

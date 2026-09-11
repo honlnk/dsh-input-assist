@@ -71,6 +71,17 @@ test('mergeDicts：不传用户词返回内置 bundle（同一引用）', () => 
 	assert.equal(mergeDicts(BUILTIN_DICT), BUILTIN_DICT)
 })
 
+test('mergeDicts：英文用户词条分流进 enPhrases（自动获得词边界匹配）', () => {
+	const dict = mergeDicts(BUILTIN_DICT, parseDictText('taht => that\n我的错词 => 我的正词').phrases)
+	// 英文词条：独立词检出、驼峰不误报
+	assert.deepEqual(scanWithDict('taht is fine, myTahtVar ok', dict).map((i) => i.orig), ['taht'])
+	// 中文词条照常
+	assert.ok(scanWithDict('这里有个我的错词', dict).some((i) => i.orig === '我的错词'))
+	// 英文自映射禁用内置（teh => teh）
+	const off = mergeDicts(BUILTIN_DICT, parseDictText('teh => teh').phrases)
+	assert.equal(scanWithDict('teh word', off).length, 0)
+})
+
 test('scanWithDict 与 scanLocalTypos 对纯内置词行为一致', () => {
 	for (const text of ['我迫不急待地想看看', '请登陆系统查看账单', '干净的句子。']) {
 		assert.deepEqual(scanWithDict(text, BUILTIN_DICT), scanLocalTypos(text))

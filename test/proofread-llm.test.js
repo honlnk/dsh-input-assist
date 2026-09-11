@@ -29,14 +29,17 @@ test('畸形条目被过滤（自映射/超长/换行/缺字段）', () => {
 	const issues = parseIssuesJson(JSON.stringify({
 		issues: [
 			{ orig: '一样', fix: '一样', reason: 'x' },
-			{ orig: '这一段实在太长了根本不该被当作错别字', fix: '短', reason: 'x' },
+			{ orig: '这一段实在长得太离谱了根本不该被当作错别字片段处理掉', fix: '短', reason: 'x' },
 			{ orig: '带\n换行', fix: 'x', reason: 'x' },
 			{ orig: '好的', fix: 123, reason: 'x' },
 			{ orig: '真错', fix: '真确', reason: 'x' },
+			// 英文长词（responsiveness 14 字符）在 20 上限内，应保留
+			{ orig: 'reponsiveness', fix: 'responsiveness', reason: '拼写' },
 		],
 	}))
-	assert.equal(issues.length, 1)
+	assert.equal(issues.length, 2)
 	assert.equal(issues[0].orig, '真错')
+	assert.equal(issues[1].orig, 'reponsiveness')
 })
 
 test('locateIssues 由宿主定位 offset，找不到的丢弃', () => {
