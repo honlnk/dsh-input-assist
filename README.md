@@ -124,6 +124,12 @@ npm test        # 先 build，再跑 node --test（单测指向 src/*.ts，产�
 git tag v0.1.0 && git push origin v0.1.0   # 即发布
 ```
 
+## 社区
+
+- [Show Your Plugins! 发布帖](https://github.com/deepseek-ai/deepseek-harness/discussions/6313) — dsh 上游讨论区的双语介绍帖，欢迎在这里反馈
+- [博客：给 DeepSeek Harness 装上 Copilot 式输入体验](https://blog.honlnk.com/ai/tools/dsh-input-assist) — 用户视角的功能介绍
+- 发现更多 dsh 插件：GitHub topic [`dsh-plugin`](https://github.com/topics/dsh-plugin)
+
 ## 卸载
 
 ```shell
