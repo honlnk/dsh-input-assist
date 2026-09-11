@@ -7,6 +7,8 @@
   <meta name="description" content="DeepSeek Harness（dsh）Web UI 输入助手插件：打字停顿后灰色 ghost 建议内联出现在光标后（Tab 逐词采纳），双层中文错别字检查（词典层本地 200ms 零成本 + LLM 上下文校对），文中红字标注、点击修正。" />
   <meta name="keywords" content="dsh,dsh插件,dsh-input-assist,DeepSeek Harness,deepseek,input completion,ghost text,FIM,错别字检查,中文校对,输入补全,Copilot plugin" />
   <link rel="canonical" href="https://dsh-input-assist.honlnk.com/" />
+  <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#0d1117" media="(prefers-color-scheme: dark)" />
   <!-- Open Graph -->
   <meta property="og:type" content="website" />
   <meta property="og:url" content="https://dsh-input-assist.honlnk.com/" />
@@ -19,6 +21,52 @@
   <meta name="twitter:title" content="dsh-input-assist · DeepSeek Harness 输入助手" />
   <meta name="twitter:description" content="AI 输入补全（Tab 逐词采纳）+ 双层中文错别字检查。" />
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%234F6EF7'/%3E%3Cpath d='M14 26h36M14 36h24' stroke='white' stroke-width='5' stroke-linecap='round'/%3E%3Cpath d='M44 36l6 6-6 6' fill='none' stroke='%23FFD37A' stroke-width='4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" />
+  <!-- 结构化数据：软件条目 + FAQ 富摘录 -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": "SoftwareApplication",
+        "name": "dsh-input-assist",
+        "applicationCategory": "DeveloperApplication",
+        "operatingSystem": "macOS, Linux, Windows",
+        "softwareVersion": "0.2.0",
+        "url": "https://dsh-input-assist.honlnk.com/",
+        "description": "DeepSeek Harness（dsh）Web UI 输入助手插件：AI 输入补全（ghost text，Tab 逐词采纳）与双层中文错别字检查（本地词典 + LLM 上下文校对），带图形化设置页。",
+        "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+        "license": "https://opensource.org/licenses/MIT",
+        "author": { "@type": "Person", "name": "honlnk", "url": "https://github.com/honlnk" },
+        "sameAs": "https://github.com/honlnk/dsh-input-assist"
+      },
+      {
+        "@type": "FAQPage",
+        "mainEntity": [
+          {
+            "@type": "Question",
+            "name": "会产生多少费用？",
+            "acceptedAnswer": { "@type": "Answer", "text": "补全：每次请求上限 64 token；LLM 校对：单次上限 800 token、temperature 0。停笔 800ms 防抖内多次击键只发一次。在设置卡片里关掉 LLM 层后校对零成本（只剩本地词典）。deepseek-flash 单价下日常使用的花费可以忽略。" }
+          },
+          {
+            "@type": "Question",
+            "name": "我的输入内容会被发送到哪里？",
+            "acceptedAnswer": { "@type": "Answer", "text": "只有当前输入框草稿文本会发送给 DeepSeek API（补全发光标前缀，校对发整段草稿）；词典层检查完全在浏览器本地完成。插件本身不收集任何数据，也没有统计上报。" }
+          },
+          {
+            "@type": "Question",
+            "name": "代码块、链接里的错词会误报吗？",
+            "acceptedAnswer": { "@type": "Answer", "text": "不会。扫描前会把行内代码、围栏代码块和 URL 用等长占位符掩码，词典层永不标记其中的内容；LLM 层的提名也要经过位置回验，对不上当前草稿的检出直接失效。" }
+          },
+          {
+            "@type": "Question",
+            "name": "支持哪些 dsh 版本？",
+            "acceptedAnswer": { "@type": "Answer", "text": "基于 dsh 0.1.1-rc.2 的双侧插件契约开发（slots 注入 + loopback RPC）。插件接口处于 rc 阶段，dsh 大版本升级后如遇不兼容请提 issue。" }
+          }
+        ]
+      }
+    ]
+  }
+  </script>
   <style>
     :root {
       --bg: #ffffff;
@@ -300,7 +348,11 @@
       </div>
       <div class="card">
         <h3>成本完全可控<span class="tag tag-green">省钱</span></h3>
-        <p>补/校两个独立开关就在输入框旁。配置 <code>proofreadUseLlm: false</code> 后校对完全不发请求——只剩词典层，分文不花。API key 自动复用 dsh 已保存的 DEEPSEEK_API_KEY，零配置开箱即用。</p>
+        <p>补/校两个独立开关就在输入框旁。在设置卡片里关掉 LLM 层后校对完全不发请求——只剩词典层，分文不花。API key 自动复用 dsh 已保存的 DEEPSEEK_API_KEY，零配置开箱即用。</p>
+      </div>
+      <div class="card">
+        <h3>图形化设置页<span class="tag tag-blue">v0.2</span></h3>
+        <p>设置 → 插件 → 插件配置，与官方插件同款的配置卡片：11 项配置全部图形化编辑，改完统一保存，数字与必填本地校验。模型字段点开下拉即拉取官方最新模型目录点选即填——不用再手改 <code>settings.yaml</code>（改文件也能热同步）。</p>
       </div>
     </div>
   </div>
@@ -353,7 +405,7 @@
     <div class="faq">
       <details>
         <summary>会产生多少费用？</summary>
-        <p>补全：每次请求上限 64 token；LLM 校对：单次上限 800 token、temperature 0。停笔 800ms 防抖内多次击键只发一次。把 <code>proofreadUseLlm</code> 关掉后校对层零成本（只剩本地词典）。deepseek-chat 单价下日常使用的花费可以忽略。</p>
+        <p>补全：每次请求上限 64 token；LLM 校对：单次上限 800 token、temperature 0。停笔 800ms 防抖内多次击键只发一次。在设置卡片里关掉「LLM 检查层」后校对零成本（只剩本地词典）。deepseek-flash 单价下日常使用的花费可以忽略。</p>
       </details>
       <details>
         <summary>我的输入内容会被发送到哪里？</summary>
