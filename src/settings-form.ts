@@ -3,6 +3,7 @@
 // 数字字段的 0..60000 整数边界与 host 侧 clampNumber 钳制保持一致。
 
 import type { InputAssistConfig } from './config.js'
+import { parseDictText } from './proofread-dict.js'
 
 export type SettingsFieldKind = 'toggle' | 'string' | 'number'
 
@@ -97,4 +98,33 @@ export function parseStagedPatch(staged: StagedEdits): StagedPatchResult {
 		}
 	}
 	return { patch, invalid }
+}
+
+// —— 用户自定义词库区块（仅本浏览器，localStorage；独立于上方配置暂存流） ——
+
+export const USER_DICT_MAX_ENTRIES = 2000
+export const USER_DICT_MAX_WORD_LEN = 16
+
+export interface UserDictCheck {
+	/** 解析成功的词条数（去重后）。 */
+	entries: number
+	/** 可直接渲染的错误信息（已带「第 N 行」前缀）。 */
+	errors: string[]
+	ok: boolean
+}
+
+/** 编辑器文本 → 保存校验：行式语法错误 + 错词长度 + 词条数上限。 */
+export function checkUserDictText(text: string): UserDictCheck {
+	const { phrases, errors } = parseDictText(text)
+	const out = errors.map((e) => `第 ${e.line} 行：${e.message}`)
+	for (const wrong of Object.keys(phrases)) {
+		if (wrong.length > USER_DICT_MAX_WORD_LEN) {
+			out.push(`词条「${wrong}」超过 ${USER_DICT_MAX_WORD_LEN} 字`)
+		}
+	}
+	const entries = Object.keys(phrases).length
+	if (entries > USER_DICT_MAX_ENTRIES) {
+		out.push(`词条数 ${entries} 超过上限 ${USER_DICT_MAX_ENTRIES}`)
+	}
+	return { entries, errors: out, ok: out.length === 0 }
 }

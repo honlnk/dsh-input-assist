@@ -113,6 +113,33 @@ test('parseStagedPatch 拒绝非法数字与空必填文本', () => {
 	assert.deepEqual(edge.invalid, [])
 })
 
+// —— 用户词库区块：checkUserDictText 校验（行式语法 + 上限）——
+test('checkUserDictText：合法文本给条数，错误行带行号前缀', () => {
+	const ok = api.checkUserDictText('# 注释\n\n新错词 => 新正词\n帐号 => 账户')
+	assert.equal(ok.entries, 2)
+	assert.deepEqual(ok.errors, [])
+	assert.equal(ok.ok, true)
+
+	const bad = api.checkUserDictText('合法 => 词\n没有分隔符\n=> 空错词')
+	assert.equal(bad.entries, 1)
+	assert.equal(bad.ok, false)
+	assert.deepEqual(bad.errors, ['第 2 行：缺少「=>」分隔符', '第 3 行：错词为空或含空白'])
+
+	const empty = api.checkUserDictText('')
+	assert.equal(empty.entries, 0)
+	assert.equal(empty.ok, true)
+})
+
+test('checkUserDictText：错词长度与词条数上限', () => {
+	assert.equal(api.USER_DICT_MAX_ENTRIES, 2000)
+	assert.equal(api.USER_DICT_MAX_WORD_LEN, 16)
+	const tooLong = api.checkUserDictText('一二三四五六七八九十一二三四五六七 => 目标')
+	assert.equal(tooLong.ok, false)
+	assert.ok(tooLong.errors.some((m) => m.includes('超过 16')))
+	const many = Array.from({ length: api.USER_DICT_MAX_ENTRIES + 1 }, (_, i) => `错词${i} => 正词${i}`).join('\n')
+	assert.equal(api.checkUserDictText(many).ok, false)
+})
+
 // —— apply() 注册断言 ——
 test('apply() 注册 settings.plugin.item 卡片（key=input-assist）', () => {
 	const registrations = []

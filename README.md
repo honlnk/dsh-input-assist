@@ -3,7 +3,7 @@
 DeepSeek Harness（dsh）输入助手插件：
 
 - **输入补全（ghost text）** — 打字停顿后调用 DeepSeek FIM 接口（`/beta/completions`），灰色建议**内联在光标后**（NovAI 同款：镜像层透明占位 + 灰字），`Tab` 逐词采纳、`Shift+Tab` 全量采纳、`Esc` 关闭
-- **错别字检查** — 双层检测：**词典层在浏览器本地运行**（约 150 条错词 + 上下文规则，200ms 即时标红、离线零成本）+ LLM 上下文校对（在/再、的/得/地等，800ms 防抖与补全同节奏）。**文中红字标注**（红色波浪线，当前项高亮，点红字选中），导航条逐条修正，绝不全量替换
+- **错别字检查** — 双层检测：**词典层在浏览器本地运行**（228 条错词 + 8 条上下文规则，词库数据在 `data/` 下纯文本维护，可叠加浏览器本地自定义词库；200ms 即时标红、离线零成本）+ LLM 上下文校对（在/再、的/得/地等，800ms 防抖与补全同节奏）。**文中红字标注**（红色波浪线，当前项高亮，点红字选中），导航条逐条修正，绝不全量替换
 
 ## 补全快捷键（建议灰字出现时生效）
 
@@ -53,6 +53,20 @@ v5.1 起所有配置都可在 dsh 设置界面图形化修改：侧边栏底部�
 
 模型字段支持**从 API 拉取目录**（v5.2）：点字段旁的 ▾ 方块按钮打开自定义下拉面板，每次打开都自动拉取最新目录，点选即填入；输入框始终是自由文本，任何 OpenAI 兼容端点的自定义模型名都可手填。拉取失败（未配 key、端点不可达）自动退回手填。默认模型已跟随官方迁移：`deepseek-chat` 于 2026-07-24 停用，现为 `deepseek-flash`（V4.1 Flash）。
 
+## 自定义词库（仅本浏览器）
+
+设置页卡片底部「**自定义词库（仅本浏览器）**」区块可维护你自己的错词表，语法一行一条（与内置词库同款）：
+
+```
+# 注释行
+我的错词 => 正确写法
+迫不急待 => 迫不急待   # 自映射 = 不再检查该词（禁用内置词）
+```
+
+- 与内置词库**合并**参与词典层本地扫描：同名错词覆盖内置项；自映射禁用该词
+- 仅存本浏览器 localStorage（key `dsh-input-assist:user-dict:v1`），**不随 settings.yaml 同步**；换浏览器直接复制文本粘贴即可迁移
+- 上限 2000 条、单条错词 ≤ 16 字，非法行保存时标行号；保存成功后当前草稿立即按新词库重新标红
+
 ## 配置（settings.yaml → `input-assist`，或设置页卡片图形化修改）
 
 | 键 | 默认 | 说明 |
@@ -82,17 +96,19 @@ npm run build   # tsdown 双入口构建，产物落 lib/（不含 tsc 严格检
 npm test        # build → tsc --noEmit → node --test（类型错在本地即拦截）
 ```
 
-词典曾以 DICT-SHARED 标记块在两侧逐字同步，TS 化后单一源 `src/proofread-dict.ts` 由构建器打进两侧，`test/client-bundle.test.js` 用假 ModuleLoader 真正执行 bundle 产物做守卫。
+词库数据在 `data/` 下纯文本维护（`zh-wrong-phrases.txt` 行式词库 + `zh-context-rules.json` 上下文规则），构建前由 `scripts/gen-dict.mjs` 解析校验并生成 `src/proofread-dict-data.generated.ts`（提交进 git，CI 用 `gendict + git diff` 守卫同步）——更新词库只改 data/ 文件，`npm run build` 自动生效。`test/client-bundle.test.js` 用假 ModuleLoader 真正执行 bundle 产物，验证 data → bundle 全链路；用户自定义词库（localStorage）在浏览器侧与内置词库合并扫描。
 
 ## 文档
 
-- [docs/调研与技术方案.md](./docs/调研与技术方案.md) — 立项文档：调研结论、架构、插槽契约、里程碑
-- [docs/开发记录-v1.md](./docs/开发记录-v1.md) — v1 实施记录、验证结果、踩坑清单（RPC 错误码枚举、IAB 点击问题等）
-- [docs/开发记录-v2.md](./docs/开发记录-v2.md) — v2 错别字改版：红字镜像层、导航交互、快捷键冲突排查与验证状态
-- [docs/开发记录-v3.md](./docs/开发记录-v3.md) — v3 NovAI 化改版：ghost text、逐词采纳、词典层下沉浏览器、双层防抖拆分
-- [docs/开发记录-v4.md](./docs/开发记录-v4.md) — v4 TypeScript 重构：tsdown 双入口构建、词典单源化、产物守卫测试
-- [docs/开发记录-v5.1.md](./docs/开发记录-v5.1.md) — v5.1 设置页卡片：settings.plugin.item 插槽调研与实现、暂存表单、守卫测试
-- [docs/开发记录-v5.2.md](./docs/开发记录-v5.2.md) — v5.2 模型目录拉取：models.list RPC、datalist 组合框、默认模型迁移 deepseek-flash
+- [docs/01-立项调研与技术方案.md](./docs/01-立项调研与技术方案.md) — 立项文档：调研结论、架构、插槽契约、里程碑
+- [docs/02-首版实施-补全与错别字双层.md](./docs/02-首版实施-补全与错别字双层.md) — 首版实施记录、验证结果、踩坑清单（RPC 错误码枚举、IAB 点击问题等）
+- [docs/03-错别字改版-文中红字与逐条导航.md](./docs/03-错别字改版-文中红字与逐条导航.md) — 错别字改版：红字镜像层、导航交互、快捷键冲突排查与验证状态
+- [docs/04-内联补全改版-ghost-text与词典下沉.md](./docs/04-内联补全改版-ghost-text与词典下沉.md) — NovAI 化改版：ghost text、逐词采纳、词典层下沉浏览器、双层防抖拆分
+- [docs/05-TypeScript重构与tsdown构建.md](./docs/05-TypeScript重构与tsdown构建.md) — TypeScript 重构：tsdown 双入口构建、词典单源化、产物守卫测试
+- [docs/06-设置页卡片-插件配置图形化.md](./docs/06-设置页卡片-插件配置图形化.md) — 设置页卡片：settings.plugin.item 插槽调研与实现、暂存表单、守卫测试
+- [docs/07-模型目录拉取与默认模型迁移.md](./docs/07-模型目录拉取与默认模型迁移.md) — 模型目录拉取：models.list RPC、datalist 组合框、默认模型迁移 deepseek-flash
+- [docs/08-词库外置与自定义词库-开发计划.md](./docs/08-词库外置与自定义词库-开发计划.md) — 词库数据外置 + 用户自定义词库（localStorage）开发计划
+- [docs/09-词库外置与自定义词库-实施记录.md](./docs/09-词库外置与自定义词库-实施记录.md) — 词库外置实施记录：data/ + gen-dict 生成器、合并扫描语义、设置卡片词库区块
 
 ## 架构一览
 
@@ -119,7 +135,8 @@ npm test        # build → tsc --noEmit → node --test（类型错在本地即
 - [x] v5 CI/CD + 发布（双名 npm 包、Trusted Publishing 免 token、GitHub Pages 官网）
 - [x] v5.1 设置页卡片（Settings → Plugins → 插件配置：11 项配置暂存编辑、保存/放弃、本地校验）
 - [x] v5.2 模型目录拉取（models.list RPC + 下拉建议组合框；默认模型 deepseek-chat → deepseek-flash）
-- [ ] M2.5 真实 Chrome 中验证点击/快捷键手感（含设置卡片视觉与交互）
+- [x] v6 词库外置与自定义词库（data/ 纯文本词库 + gen-dict 生成器 + CI 同步守卫；浏览器 localStorage 自定义词库、设置卡片区块编辑）
+- [ ] M2.5 真实 Chrome 中验证点击/快捷键手感（含设置卡片与自定义词库区块视觉交互）
 - [ ] M3 流式中途取消
 
 ## 发布流程（v5 起）

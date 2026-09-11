@@ -7,6 +7,8 @@ on:
     paths:
       - 'src/**'
       - 'test/**'
+      - 'data/**'
+      - 'scripts/**'
       - 'package.json'
       - 'package-lock.json'
       - 'tsconfig.json'
@@ -34,6 +36,13 @@ jobs:
 
       - name: Typecheck
         run: npm run typecheck
+
+      # 词库同步守卫：data/ 变更必须连带重新生成 generated.ts 提交
+      # （同时拦截手改生成物——两种漂移都让 diff 非空而红）。
+      - name: Dict sync guard
+        run: |
+          npm run gendict
+          git diff --exit-code -- src/proofread-dict-data.generated.ts
 
       - name: Run tests (build first)
         run: npm test

@@ -340,7 +340,7 @@
       </div>
       <div class="card">
         <h3>错别字检查<span class="tag tag-green">词典层 · 本地</span><span class="tag tag-purple">LLM 层</span></h3>
-        <p>词典层：约 150 条高置信错词 + 上下文规则，200ms 在浏览器本地标红，离线零成本。LLM 层：在/再、的/得/地这类需要句意的混淆，800ms 与补全同节奏请求。文中红波浪线标注，点红字即选中，绝不全量替换。</p>
+        <p>词典层：228 条高置信错词 + 8 条上下文规则（词库在仓库 <code>data/</code> 下纯文本维护），200ms 在浏览器本地标红，离线零成本。LLM 层：在/再、的/得/地这类需要句意的混淆，800ms 与补全同节奏请求。文中红波浪线标注，点红字即选中，绝不全量替换。</p>
       </div>
       <div class="card">
         <h3>逐条导航修正<span class="tag tag-orange">导航条</span></h3>
@@ -353,6 +353,10 @@
       <div class="card">
         <h3>图形化设置页<span class="tag tag-blue">v0.2</span></h3>
         <p>设置 → 插件 → 插件配置，与官方插件同款的配置卡片：11 项配置全部图形化编辑，改完统一保存，数字与必填本地校验。模型字段点开下拉即拉取官方最新模型目录点选即填——不用再手改 <code>settings.yaml</code>（改文件也能热同步）。</p>
+      </div>
+      <div class="card">
+        <h3>自定义词库<span class="tag tag-green">本地 · 免费</span></h3>
+        <p>设置卡片底部可维护你自己的错词表，一行一条「错词 =&gt; 正词」：补充领域术语的误打，同名错词覆盖内置项，<code>错词 =&gt; 错词</code> 可禁用某个内置词。只存本浏览器（localStorage），不上传不同步；保存后当前草稿立即重新标红。</p>
       </div>
     </div>
   </div>
@@ -414,6 +418,10 @@
       <details>
         <summary>代码块、链接里的错词会误报吗？</summary>
         <p>不会。扫描前会把行内代码、围栏代码块和 URL 用等长占位符掩码，词典层永不标记其中的内容；LLM 层的提名也要经过位置回验，对不上当前草稿的检出直接失效。</p>
+      </details>
+      <details>
+        <summary>能添加自己的错词吗？</summary>
+        <p>能。设置卡片底部「自定义词库（仅本浏览器）」一行一条「错词 =&gt; 正词」，与内置词库合并参与本地检查；同名错词覆盖内置项，写成自映射（错词 =&gt; 错词）可禁用某个内置词。数据只存在本浏览器 localStorage，换设备直接复制文本粘贴过去即可。</p>
       </details>
       <details>
         <summary>支持哪些 dsh 版本？</summary>

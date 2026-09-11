@@ -29,7 +29,8 @@
 import * as react from 'react'
 import { createSnapshotStore, type SnapshotStore } from '@deepseek-ai/dsh-client-runtime/client'
 import { NS, CHANNEL, DEFAULT_CONFIG, type InputAssistConfig } from './config.js'
-import { scanLocalTypos, type TypoIssue } from './proofread-dict.js'
+import { scanLocalTypos, scanWithDict, mergeDicts, BUILTIN_DICT, parseDictText, type TypoIssue } from './proofread-dict.js'
+import { loadUserDictText, saveUserDictText, type DictStorage } from './user-dict.js'
 import { mergeIssues } from './proofread-llm.js'
 import {
 	SETTINGS_FIELDS,
@@ -39,13 +40,20 @@ import {
 	fieldText,
 	fieldChecked,
 	parseStagedPatch,
+	checkUserDictText,
+	USER_DICT_MAX_ENTRIES,
+	USER_DICT_MAX_WORD_LEN,
 	type StagedEdits,
 } from './settings-form.js'
 
 // 测试出口：bundle 内的词典扫描与设置表单行为守卫（test/*.test.js 经
 // ModuleLoader 壳取回），宿主运行时只消费 apply/inject，不受影响。
 export { scanLocalTypos }
+export { scanWithDict, mergeDicts, BUILTIN_DICT, parseDictText }
+export { loadUserDictText, saveUserDictText }
+export { scanWithUserDict }
 export { SETTINGS_FIELDS, stageValue, unstageValue, isFieldStaged, fieldText, fieldChecked, parseStagedPatch }
+export { checkUserDictText, USER_DICT_MAX_ENTRIES, USER_DICT_MAX_WORD_LEN }
 
 export const inject = ['slots', 'locale', 'connection', 'remote']
 
@@ -283,6 +291,14 @@ const CSS = [
 	'.ia_sOpt.ia_sel{color:#679efe}',
 	'.ia_sOptCheck{flex:none;display:flex}',
 	'.ia_smodelsNote{margin:0;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:1.5}',
+	// —— 自定义词库区块（仅本浏览器） ——
+	'.ia_suserdict{gap:8px}',
+	'.ia_stextarea{width:100%;box-sizing:border-box;resize:vertical;min-height:96px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-module-platform);color:var(--dsw-alias-label-primary);font:inherit;font-size:13px;line-height:1.6;padding:6px 10px;font-family:var(--dsw-alias-font-mono,ui-monospace,SFMono-Regular,Menlo,Consolas,monospace)}',
+	'.ia_stextarea:focus{outline:none;border-color:#679efe}',
+	'.ia_stextarea.ia_bad,.ia_stextarea.ia_bad:focus{border-color:var(--dsw-alias-accent-danger,#e5484d)}',
+	'.ia_suserdictMeta{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:1.5}',
+	'.ia_suserdictErrors{margin:0;padding:0;list-style:none;color:var(--dsw-alias-accent-danger,#e5484d);font-size:11px;line-height:1.6}',
+	'.ia_suserdictBtns{display:flex;justify-content:flex-end;gap:8px}',
 	'.ia_scardFoot{border-top:1px solid var(--dsw-alias-border-l2);display:flex;align-items:center;justify-content:flex-end;gap:8px;padding:12px 0 4px}',
 	'.ia_sfailed{min-width:0;flex:1;margin:0;color:var(--dsw-alias-label-error);font-size:12px;line-height:1.5}',
 	'.ia_sDiscard,.ia_sSave{appearance:none;cursor:pointer;font:inherit;border:1px solid transparent;border-radius:8px;padding:5px 14px;font-size:13px;line-height:1.5}',
@@ -359,6 +375,35 @@ let llmTimer: ReturnType<typeof setTimeout> | undefined
 let completionSeq = 0
 let dictSeq = 0
 let llmSeq = 0
+
+// 最近一次草稿（rescanDict 用：用户词库保存后按新词库立即重扫，不等防抖）
+let lastDraft = ''
+let lastDraftRev = -1
+
+// —— 用户词库（浏览器 localStorage，仅本机） ——
+// 每轮防抖现读现解析：千行级文本解析 <1ms，不值得做缓存（慢了再加 memo）。
+const dictStorage = (): DictStorage | undefined => {
+	try {
+		return typeof localStorage !== 'undefined' ? localStorage : undefined
+	} catch {
+		return undefined
+	}
+}
+
+/** 内置 + 用户词库合并扫描（亦为 bundle 测试出口：端到端验证合并语义）。 */
+const scanWithUserDict = (text: string, userDictText: string): TypoIssue[] =>
+	scanWithDict(text, mergeDicts(BUILTIN_DICT, parseDictText(userDictText).phrases))
+
+/** 用户词库保存后立即重扫当前草稿；复位会话级忽略（dismiss），保留逐条“标记正确”。 */
+const rescanDict = (): void => {
+	dictSeq += 1 // 使在途防抖结果作废
+	setAssist({
+		dictIssues: scanWithUserDict(lastDraft, loadUserDictText(dictStorage())),
+		issueRev: lastDraftRev,
+		issueIndex: 0,
+		dismissedRev: -1,
+	})
+}
 
 const findTextarea = (): HTMLTextAreaElement | null => {
 	const el = document.querySelector('[data-composer-card] textarea')
@@ -563,6 +608,8 @@ const syncDockRows = (): void => {
 function onDraftChanged(draft: string, rev: number): void {
 	const cfg = configStore.getSnapshot()
 	const caret = composerCaret() ?? draft.length
+	lastDraft = draft
+	lastDraftRev = rev
 	const completionActive =
 		cfg.completionEnabled && draft.trim().length >= 2 && !lineStartsWithTrigger(draft, caret)
 	debug({ onDraftChanged: true, draftLen: draft.length, rev, completionActive })
@@ -625,7 +672,7 @@ function onDraftChanged(draft: string, rev: number): void {
 	} else {
 		dictTimer = setTimeout(() => {
 			if (dSeq !== dictSeq) return
-			setAssist({ dictIssues: scanLocalTypos(draft), issueRev: rev, issueIndex: 0 })
+			setAssist({ dictIssues: scanWithUserDict(draft, loadUserDictText(dictStorage())), issueRev: rev, issueIndex: 0 })
 		}, cfg.proofreadDictDebounceMs)
 		if (cfg.proofreadUseLlm !== false) {
 			llmTimer = setTimeout(async () => {
@@ -814,6 +861,26 @@ function SettingsCard(props: SettingsCardProps): react.ReactElement | null {
 	const parsed = parseStagedPatch(staged)
 	const dirty = Object.keys(staged).length > 0
 	const blocked = !dirty || parsed.invalid.length > 0 || saving
+
+	// —— 自定义词库（仅本浏览器）：独立暂存流，目标 localStorage 而非 settings.yaml ——
+	// userDraft 为 null 表示未编辑（textarea 显示已存值）；保存成功即重扫当前草稿
+	const [userSavedText, setUserSavedText] = react.useState((): string => loadUserDictText(dictStorage()))
+	const [userDraft, setUserDraft] = react.useState<string | null>(null)
+	const [userStoreFailed, setUserStoreFailed] = react.useState(false)
+	const userText = userDraft ?? userSavedText
+	const userCheck = checkUserDictText(userText)
+	const userDirty = userDraft !== null && userDraft !== userSavedText
+	const onSaveUserDict = (): void => {
+		if (!userDirty || !userCheck.ok) return
+		if (saveUserDictText(dictStorage(), userDraft ?? '')) {
+			setUserSavedText(userDraft ?? '')
+			setUserDraft(null)
+			setUserStoreFailed(false)
+			rescanDict()
+		} else {
+			setUserStoreFailed(true)
+		}
+	}
 
 	const fetchModelList = async (): Promise<void> => {
 		if (api.fetchModels === undefined) return
@@ -1076,15 +1143,76 @@ function SettingsCard(props: SettingsCardProps): react.ReactElement | null {
 				})),
 			),
 		),
-		open
-			? el(
-					'div',
-					{ className: 'ia_scardBody' },
-					group('completion'),
-					group('proofread'),
-					modelsState === 'failed'
-						? el('p', { key: 'modelsNote', className: 'ia_smodelsNote', role: 'status' }, t('settings.modelsFailed'))
-						: null,
+			open
+				? el(
+						'div',
+						{ className: 'ia_scardBody' },
+						group('completion'),
+						group('proofread'),
+						el('div', { key: 'ud-group', className: 'ia_sgroup' }, t('settings.userDictGroup')),
+						el(
+							'div',
+							{ key: 'ud-rows', className: 'ia_srows ia_suserdict' },
+							el('div', { className: 'ia_srowHint' }, t('settings.userDictHint')),
+							el('textarea', {
+								className: `ia_stextarea${userDirty && !userCheck.ok ? ' ia_bad' : ''}`,
+								rows: 6,
+								spellCheck: false,
+								'aria-label': t('settings.userDictLabel'),
+								'aria-invalid': userDirty && !userCheck.ok ? 'true' : undefined,
+								value: userText,
+								onChange: (event: { target: { value: string } }) => {
+									setUserStoreFailed(false)
+									setUserDraft(event.target.value)
+								},
+							}),
+							el(
+								'div',
+								{ className: 'ia_suserdictMeta', 'data-ia-userdict-entries': userCheck.entries },
+								`${userCheck.entries} ${t('settings.userDictUnit')}`,
+								userDirty ? ` · ${t('settings.unsaved')}` : '',
+							),
+							userDirty && userCheck.errors.length > 0
+								? el(
+										'ul',
+										{ key: 'ud-errors', className: 'ia_suserdictErrors', role: 'alert' },
+										userCheck.errors.map((msg, i) => el('li', { key: i }, msg)),
+									)
+								: null,
+							userStoreFailed
+								? el('p', { key: 'ud-storefail', className: 'ia_sfailed', role: 'status' }, t('settings.userDictStoreFailed'))
+								: null,
+							el(
+								'div',
+								{ key: 'ud-btns', className: 'ia_suserdictBtns' },
+								el(
+									'button',
+									{
+										type: 'button',
+										className: 'ia_sDiscard',
+										disabled: !userDirty,
+										onClick: () => {
+											setUserDraft(null)
+											setUserStoreFailed(false)
+										},
+									},
+									t('settings.discard'),
+								),
+								el(
+									'button',
+									{
+										type: 'button',
+										className: 'ia_sSave',
+										disabled: !userDirty || !userCheck.ok,
+										onClick: onSaveUserDict,
+									},
+									t('settings.save'),
+								),
+							),
+						),
+						modelsState === 'failed'
+							? el('p', { key: 'modelsNote', className: 'ia_smodelsNote', role: 'status' }, t('settings.modelsFailed'))
+							: null,
 					el(
 						'div',
 						{ className: 'ia_scardFoot' },
@@ -1189,6 +1317,13 @@ export function apply(ctx: PluginContext): void {
 					'settings.f.proofreadDebounceMs': 'LLM 检查防抖（毫秒）',
 					'settings.f.proofreadDictDebounceMs': '词典检查防抖（毫秒）',
 					'settings.h.proofreadDictDebounceMs': '浏览器本地扫描，即时标红',
+					// —— 自定义词库（仅本浏览器） ——
+					'settings.userDictGroup': '自定义词库（仅本浏览器）',
+					'settings.userDictHint':
+						'每行一条「错词 => 正词」，# 开头为注释；同名错词覆盖内置词，「错词 => 错词」表示不再检查该词。只保存在本浏览器，不随 settings.yaml 同步，换浏览器需自行复制。',
+					'settings.userDictLabel': '自定义词库内容',
+					'settings.userDictUnit': '条',
+					'settings.userDictStoreFailed': '无法写入本浏览器存储（可能处于隐私模式或存储已满），词库未保存',
 				},
 				en: {
 					'toggle.completion':
@@ -1246,6 +1381,13 @@ export function apply(ctx: PluginContext): void {
 					'settings.f.proofreadDebounceMs': 'LLM debounce (ms)',
 					'settings.f.proofreadDictDebounceMs': 'Dictionary debounce (ms)',
 					'settings.h.proofreadDictDebounceMs': 'Browser-local scan, instant marks',
+					// —— Custom dictionary (this browser only) ——
+					'settings.userDictGroup': 'Custom dictionary (this browser only)',
+					'settings.userDictHint':
+						'One entry per line: “wrong => right”; lines starting with # are comments. Same-key entries override the builtin ones; “wrong => wrong” disables checking that word. Stored in this browser only (not synced via settings.yaml).',
+					'settings.userDictLabel': 'Custom dictionary content',
+					'settings.userDictUnit': 'entries',
+					'settings.userDictStoreFailed': 'Cannot write to browser storage (private mode or quota exceeded); dictionary not saved',
 				},
 			}),
 		'input-assist: dictionaries',

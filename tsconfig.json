@@ -12,6 +12,7 @@
 		"skipLibCheck": true,
 		"forceConsistentCasingInFileNames": true,
 		"verbatimModuleSyntax": true,
+		"allowImportingTsExtensions": true,
 		"noEmit": true
 	},
 	"include": ["src/**/*.ts", "test/**/*.ts", "tsdown.config.ts"]

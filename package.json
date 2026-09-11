@@ -55,14 +55,17 @@
 	"files": [
 		"lib/",
 		"test/",
+		"data/",
+		"scripts/",
 		"cordis.patch.yml",
 		"README.md"
 	],
 	"scripts": {
-		"build": "tsdown",
+		"gendict": "node scripts/gen-dict.mjs",
+		"build": "npm run gendict && tsdown",
 		"typecheck": "tsc --noEmit -p tsconfig.json",
 		"test": "npm run build && npm run typecheck && node --test test/*.test.js",
-		"prepack": "npm run typecheck && npm run build"
+		"prepack": "npm run typecheck && npm run gendict && npm run build"
 	},
 	"dependencies": {
 		"@deepseek-ai/dsh-settings": "^0.1.1-rc.2",

@@ -57,10 +57,53 @@ test('exports 形状：apply/inject/scanLocalTypos', () => {
 	assert.equal(typeof api.apply, 'function')
 	assert.deepEqual(api.inject, ['slots', 'locale', 'connection', 'remote'])
 	assert.equal(typeof api.scanLocalTypos, 'function')
+	assert.equal(typeof api.scanWithUserDict, 'function')
+	assert.equal(typeof api.loadUserDictText, 'function')
+	assert.equal(typeof api.saveUserDictText, 'function')
+})
+
+// —— 用户自定义词库端到端（localStorage 值 → 合并 → 扫描，全在 bundle 内） ——
+test('用户词库：新增/覆盖/自映射禁用，经 bundle 完整链路生效', () => {
+	const api = loadBundleExports()
+	const userText = ['新错词 => 新正词', '帐号 => 账户', '迫不急待 => 迫不急待'].join('\n')
+	const hits = (text) => api.scanWithUserDict(text, userText).map((i) => `${i.orig}→${i.fix}`)
+	// 新增词
+	assert.deepEqual(hits('这里有个新错词'), ['新错词→新正词'])
+	// 覆盖内置同错词的目标词
+	assert.deepEqual(hits('这个帐号被盗了'), ['帐号→账户'])
+	// 自映射禁用内置「迫不急待」；未禁用的内置词照常
+	assert.deepEqual(hits('他迫不急待，一如继往'), ['一如继往→一如既往'])
+	// 空用户词库 = 纯内置
+	assert.deepEqual(api.scanWithUserDict('他迫不急待地想知道结果', '').map((i) => i.orig), ['迫不急待'])
+})
+
+test('用户词库 storage 封装经 bundle 可用（假 storage 注入）', () => {
+	const api = loadBundleExports()
+	const s = { getItem: () => null, setItem: () => {} }
+	let saved = ''
+	const store = { getItem: () => 'x => y', setItem: (k, v) => { saved = v } }
+	assert.equal(api.loadUserDictText(store), 'x => y')
+	assert.equal(api.loadUserDictText(undefined), '')
+	assert.equal(api.saveUserDictText(store, 'a => b'), true)
+	assert.equal(saved, 'a => b')
+	assert.equal(api.saveUserDictText(null, 'a => b'), false)
+	assert.equal(api.loadUserDictText(s), '')
 })
 
 // —— bundle 内词典行为（单源，直接断言期望值）——
 const bundleScan = (text) => loadBundleExports().scanLocalTypos(text)
+
+test('data/ 词库条目端到端进 bundle 并可检出（data → gen-dict → bundle 链路）', () => {
+	// 取 data/zh-wrong-phrases.txt 的第一条真实词条，构造包含句验证 bundle 能检出
+	const first = readFileSync(join(here, '../data/zh-wrong-phrases.txt'), 'utf8')
+		.split(/\r?\n/)
+		.find((l) => l.trim() !== '' && !l.trim().startsWith('#'))
+	const [wrong, right] = first.split('=>').map((s) => s.trim())
+	const issues = bundleScan(`这句话里出现了${wrong}这个错词`)
+	assert.equal(issues.length, 1)
+	assert.equal(issues[0].orig, wrong)
+	assert.equal(issues[0].fix, right)
+})
 
 test('词典命中：错词映射与 offset', () => {
 	const issues = bundleScan('我迫不急待地想看看这个结果')
