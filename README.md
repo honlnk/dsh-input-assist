@@ -44,22 +44,28 @@ dsh plugin --profile web add "$PWD"
 API key 三选一（补全与 LLM 检查层需要；词典层无需任何配置）：
 
 1. 什么都不做——插件自动复用 dsh 已保存的 `DEEPSEEK_API_KEY`（`.credentials.yaml`）或环境变量
-2. `~/.dsh/settings.yaml` 里写 `input-assist.completionApiKey: sk-…`
-3. 环境变量 `DEEPSEEK_API_KEY=sk-… dsh web`
+2. 设置页填：侧边栏底部齿轮 → **Plugins → 插件配置 → Input Assist** 卡片（推荐，全部配置图形化）
+3. `~/.dsh/settings.yaml` 里写 `input-assist.completionApiKey: sk-…`，或环境变量 `DEEPSEEK_API_KEY=sk-… dsh web`
 
-## 配置（settings.yaml → `input-assist`）
+## 设置页卡片
+
+v5.1 起所有配置都可在 dsh 设置界面图形化修改：侧边栏底部齿轮 → **Plugins → 插件配置**，找「输入助手」卡片展开即可。交互与官方兄弟卡片（Bash / Agent Loop / Web Search）同构：暂存编辑 → 统一「保存 / 放弃修改」，数字与必填文本本地校验，字段行带「未保存」蓝点与单项撤销（×）。卡片注册走官方 `settings.plugin.item` 插槽（keyed by 设置命名空间），无需新增任何服务依赖；设置文件外部修改仍会热同步进卡片。
+
+模型字段支持**从 API 拉取目录**（v5.2）：点字段旁的 ▾ 方块按钮打开自定义下拉面板，每次打开都自动拉取最新目录，点选即填入；输入框始终是自由文本，任何 OpenAI 兼容端点的自定义模型名都可手填。拉取失败（未配 key、端点不可达）自动退回手填。默认模型已跟随官方迁移：`deepseek-chat` 于 2026-07-24 停用，现为 `deepseek-flash`（V4.1 Flash）。
+
+## 配置（settings.yaml → `input-assist`，或设置页卡片图形化修改）
 
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
 | `completionEnabled` | `true` | 输入补全开关（输入框「补」按钮同效） |
 | `completionBaseUrl` | `https://api.deepseek.com/beta` | FIM 端点（OpenAI 兼容可换） |
 | `completionApiKey` | `''` | 留空则走凭证回退 |
-| `completionModel` | `deepseek-chat` | 补全模型 |
+| `completionModel` | `deepseek-flash` | 补全模型（输入框可下拉选择，⟳ 从 API 拉取目录） |
 | `completionDebounceMs` | `800` | 停笔多久后请求建议（与 LLM 校对同节奏） |
 | `completionMaxTokens` | `64` | 建议长度上限 |
 | `proofreadEnabled` | `true` | 错别字检查开关（「校」按钮同效） |
 | `proofreadUseLlm` | `true` | 是否叠加 LLM 检查层（关掉则完全不花钱） |
-| `proofreadModel` | `deepseek-chat` | LLM 检查模型 |
+| `proofreadModel` | `deepseek-flash` | LLM 检查模型（同上，下拉选择） |
 | `proofreadDebounceMs` | `800` | LLM 层防抖（与补全同节奏，两路同时返回） |
 | `proofreadDictDebounceMs` | `200` | 词典层防抖（浏览器本地扫描，零成本） |
 
@@ -72,8 +78,8 @@ API key 三选一（补全与 LLM 检查层需要；词典层无需任何配置�
 
 ```shell
 npm install
-npm run build   # tsc 类型检查由 tsdown 内置完成；产物落 lib/
-npm test        # 先 build，再跑 node --test（单测指向 src/*.ts，产物守卫指向 lib/client.js）
+npm run build   # tsdown 双入口构建，产物落 lib/（不含 tsc 严格检查）
+npm test        # build → tsc --noEmit → node --test（类型错在本地即拦截）
 ```
 
 词典曾以 DICT-SHARED 标记块在两侧逐字同步，TS 化后单一源 `src/proofread-dict.ts` 由构建器打进两侧，`test/client-bundle.test.js` 用假 ModuleLoader 真正执行 bundle 产物做守卫。
@@ -85,6 +91,8 @@ npm test        # 先 build，再跑 node --test（单测指向 src/*.ts，产�
 - [docs/开发记录-v2.md](./docs/开发记录-v2.md) — v2 错别字改版：红字镜像层、导航交互、快捷键冲突排查与验证状态
 - [docs/开发记录-v3.md](./docs/开发记录-v3.md) — v3 NovAI 化改版：ghost text、逐词采纳、词典层下沉浏览器、双层防抖拆分
 - [docs/开发记录-v4.md](./docs/开发记录-v4.md) — v4 TypeScript 重构：tsdown 双入口构建、词典单源化、产物守卫测试
+- [docs/开发记录-v5.1.md](./docs/开发记录-v5.1.md) — v5.1 设置页卡片：settings.plugin.item 插槽调研与实现、暂存表单、守卫测试
+- [docs/开发记录-v5.2.md](./docs/开发记录-v5.2.md) — v5.2 模型目录拉取：models.list RPC、datalist 组合框、默认模型迁移 deepseek-flash
 
 ## 架构一览
 
@@ -93,6 +101,7 @@ npm test        # 先 build，再跑 node --test（单测指向 src/*.ts，产�
   input.overlay  仅错误提示（无浮层）     loopback    settings 命名空间 input-assist
   input.dock     错别字面板+修正      ───RPC /input-assist───▶  complete   → FIM /beta/completions
   input.right    补/校 开关                             proofread → LLM 层（llmOnly）
+  settings.plugin.item  设置页卡片（Plugins→插件配置）    config.get/set → 设置文档读写
   useInput 读草稿 · inputActions.setDraft 写回
   镜像层（body 挂载）：文中红字 + 光标后灰色 ghost 建议
   词典层本地运行（单源 src/proofread-dict.ts，构建时打进 client bundle）
@@ -108,8 +117,10 @@ npm test        # 先 build，再跑 node --test（单测指向 src/*.ts，产�
 - [x] v3 NovAI 化改版（ghost text 内联建议、Tab 逐词采纳、词典层下沉浏览器 200ms、LLM/补全统一 800ms）
 - [x] v4 TypeScript 重构（src/ 全量 TS、tsdown 双入口构建、词典单源化、37 测试）
 - [x] v5 CI/CD + 发布（双名 npm 包、Trusted Publishing 免 token、GitHub Pages 官网）
-- [ ] M2.5 真实 Chrome 中验证点击/快捷键手感
-- [ ] M3 流式 / 设置 UI
+- [x] v5.1 设置页卡片（Settings → Plugins → 插件配置：11 项配置暂存编辑、保存/放弃、本地校验）
+- [x] v5.2 模型目录拉取（models.list RPC + 下拉建议组合框；默认模型 deepseek-chat → deepseek-flash）
+- [ ] M2.5 真实 Chrome 中验证点击/快捷键手感（含设置卡片视觉与交互）
+- [ ] M3 流式中途取消
 
 ## 发布流程（v5 起）
 
