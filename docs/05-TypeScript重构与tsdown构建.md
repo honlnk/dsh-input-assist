@@ -1,4 +1,4 @@
-# 开发记录 v4 — TypeScript 重构
+# 开发记录 · TypeScript 重构
 
 > 2026-08-23 · 目标：全量迁移到 TypeScript（strict），构建改用官方插件惯例的 tsdown，
 > 词典从「双份拷贝逐字同步」升级为「单一源 + 构建器分发」。

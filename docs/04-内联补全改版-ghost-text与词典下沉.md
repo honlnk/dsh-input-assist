@@ -1,4 +1,4 @@
-# 开发记录 v3 — NovAI 化改版（ghost text + 词典层下沉）
+# 开发记录 · NovAI 化改版（ghost text + 词典层下沉）
 
 日期：2026-08-23
 
