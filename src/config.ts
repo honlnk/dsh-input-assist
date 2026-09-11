@@ -19,17 +19,19 @@ export interface InputAssistConfig {
 }
 
 /** Defaults mirrored by the host-side schema; also the client's fallback when
- *  the settings service is absent or unreachable. */
+ *  the settings service is absent or unreachable.
+ *  Model default note: deepseek-chat was discontinued by DeepSeek on
+ *  2026-07-24; deepseek-flash is the current recommended name (V4.1 Flash). */
 export const DEFAULT_CONFIG: InputAssistConfig = {
 	completionEnabled: true,
 	completionBaseUrl: 'https://api.deepseek.com/beta',
 	completionApiKey: '',
-	completionModel: 'deepseek-chat',
+	completionModel: 'deepseek-flash',
 	completionDebounceMs: 800,
 	completionMaxTokens: 64,
 	proofreadEnabled: true,
 	proofreadUseLlm: true,
-	proofreadModel: 'deepseek-chat',
+	proofreadModel: 'deepseek-flash',
 	proofreadDebounceMs: 800,
 	proofreadDictDebounceMs: 200,
 }

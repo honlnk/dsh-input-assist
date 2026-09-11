@@ -17,7 +17,7 @@ import { join } from 'node:path'
 import { settingsNamespace } from '@deepseek-ai/dsh-settings'
 import z from '@deepseek-ai/schemastery'
 import type { Context } from '@deepseek-ai/cordis'
-import { requestFimCompletion } from './completion.js'
+import { requestFimCompletion, listModels } from './completion.js'
 import { scanLocalTypos } from './proofread-dict.js'
 import { llmProofread, locateIssues, mergeIssues } from './proofread-llm.js'
 import { CHANNEL, DEFAULT_CONFIG, NS } from './config.js'
@@ -108,6 +108,14 @@ export interface ProofreadValue {
 	issues: TypoIssue[]
 }
 
+export interface ModelsValue {
+	models: string[]
+	/** '' on success; 'no-api-key' / 'fetch-failed' otherwise. */
+	reason?: string
+	/** Short failure detail for the fetch-failed case. */
+	message?: string
+}
+
 /**
  * Build the RPC handler. Pure dependency injection so tests can drive every
  * endpoint without a real cordis context.
@@ -185,6 +193,26 @@ export function createHandler({ getConfig, updateConfig }: HandlerDeps) {
 				}
 			}
 			return { ok: true, value: { issues: mergeIssues(local, llmIssues) } satisfies ProofreadValue }
+		}
+		if (endpoint === 'models.list') {
+			// OpenAI 兼容目录接口（GET {platform}/models）：失败一律 ok+reason
+			// 返回空列表（UI 退回手填），不走 transport 错误码。
+			const cfg = getConfig()
+			const apiKey = resolveApiKey(cfg)
+			if (!apiKey) return { ok: true, value: { models: [], reason: 'no-api-key' } satisfies ModelsValue }
+			try {
+				const models = await listModels({ baseUrl: cfg.completionBaseUrl, apiKey })
+				return { ok: true, value: { models } satisfies ModelsValue }
+			} catch (error) {
+				return {
+					ok: true,
+					value: {
+						models: [],
+						reason: 'fetch-failed',
+						message: error instanceof Error ? error.message.slice(0, 200) : String(error),
+					} satisfies ModelsValue,
+				}
+			}
 		}
 		return rpcError(`unknown endpoint ${String(endpoint)}`)
 	}

@@ -31,7 +31,7 @@ test('config.get 返回默认配置', async () => {
 	const handler = makeHandler()
 	const res = await handler('config.get', {})
 	assert.equal(res.ok, true)
-	assert.equal(res.value.completionModel, 'deepseek-chat')
+	assert.equal(res.value.completionModel, 'deepseek-flash')
 	assert.equal(res.value.completionEnabled, true)
 })
 
@@ -46,7 +46,7 @@ test('config.set 只接受白名单键并做类型清洗', async () => {
 	assert.equal(res.ok, true)
 	assert.equal(res.value.completionEnabled, false)
 	assert.equal(res.value.completionDebounceMs, 300)
-	assert.equal(res.value.proofreadModel, 'deepseek-chat')
+	assert.equal(res.value.proofreadModel, 'deepseek-flash')
 	assert.ok(!('hackKey' in res.value))
 })
 
@@ -111,4 +111,57 @@ test('resolveApiKey：环境变量回退', () => {
 	assert.equal(resolveApiKey({ completionApiKey: '' }), 'sk-env-fallback')
 	assert.equal(resolveApiKey({ completionApiKey: 'sk-own' }), 'sk-own')
 	delete process.env.DEEPSEEK_API_KEY
+})
+
+test('models.list：成功返回排序后的模型目录', async () => {
+	const saved = globalThis.fetch
+	let hit = ''
+	globalThis.fetch = async (url) => {
+		hit = String(url)
+		return { ok: true, json: async () => ({ data: [{ id: 'deepseek-flash' }, { id: 'deepseek-v4-pro' }] }) }
+	}
+	try {
+		const handler = makeHandler({ completionApiKey: 'sk-test' })
+		const res = await handler('models.list', {})
+		assert.equal(res.ok, true)
+		assert.deepEqual(res.value.models, ['deepseek-flash', 'deepseek-v4-pro'])
+		assert.equal(res.value.reason, undefined)
+		assert.equal(hit, 'https://api.deepseek.com/models') // /beta 尾段被剥掉
+	} finally {
+		globalThis.fetch = saved
+	}
+})
+
+test('models.list：无 apiKey 以 reason 标识且不发请求', async () => {
+	const saved = globalThis.fetch
+	let called = false
+	globalThis.fetch = async () => {
+		called = true
+		return { ok: true, json: async () => ({ data: [] }) }
+	}
+	try {
+		const handler = makeHandler({ completionApiKey: '' })
+		const res = await handler('models.list', {})
+		assert.equal(res.ok, true)
+		assert.deepEqual(res.value.models, [])
+		assert.equal(res.value.reason, 'no-api-key')
+		assert.equal(called, false)
+	} finally {
+		globalThis.fetch = saved
+	}
+})
+
+test('models.list：拉取失败 ok 返回 reason 不走错误码', async () => {
+	const saved = globalThis.fetch
+	globalThis.fetch = async () => ({ ok: false, status: 500, text: async () => 'boom' })
+	try {
+		const handler = makeHandler({ completionApiKey: 'sk-test' })
+		const res = await handler('models.list', {})
+		assert.equal(res.ok, true)
+		assert.deepEqual(res.value.models, [])
+		assert.equal(res.value.reason, 'fetch-failed')
+		assert.ok(res.value.message.includes('500'))
+	} finally {
+		globalThis.fetch = saved
+	}
 })

@@ -89,3 +89,37 @@ export async function requestFimCompletion({
 	const data: unknown = await res.json()
 	return normalizeSuggestion(extractCompletionText(data), 200, prompt)
 }
+
+/**
+ * Strip the FIM-only tail (/beta, /v1) from a completion base to get the
+ * platform base that serves the OpenAI-compatible GET /models — DeepSeek
+ * serves FIM at /beta/completions but the model directory at /models.
+ */
+export function platformBaseUrl(baseUrl: string): string {
+	const base = String(baseUrl || 'https://api.deepseek.com/beta').replace(/\/+$/, '')
+	return base.replace(/\/(beta|v1)$/, '')
+}
+
+export interface ListModelsArgs {
+	/** FIM base (the /beta tail is stripped internally). */
+	baseUrl: string
+	apiKey: string
+	timeoutMs?: number
+}
+
+/** GET {platform}/models (OpenAI-compatible directory); sorted unique ids. */
+export async function listModels({ baseUrl, apiKey, timeoutMs = 8000 }: ListModelsArgs): Promise<string[]> {
+	const res = await fetch(`${platformBaseUrl(baseUrl)}/models`, {
+		headers: { authorization: `Bearer ${apiKey}` },
+		signal: AbortSignal.timeout(timeoutMs),
+	})
+	if (!res.ok) throw new Error(`models HTTP ${res.status}`)
+	const data: unknown = await res.json()
+	const list = (data as { data?: unknown }).data
+	if (!Array.isArray(list)) return []
+	const ids = list.flatMap((entry) => {
+		const id = (entry as { id?: unknown } | null)?.id
+		return typeof id === 'string' && id !== '' ? [id] : []
+	})
+	return [...new Set(ids)].sort()
+}

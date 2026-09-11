@@ -4,6 +4,9 @@
 //   conversation.input.overlay — 仅补全错误提示（建议本体由镜像层 ghost text 渲染）
 //   conversation.input.dock    — 错别字导航条（上一个/下一个/修正/标记正确/忽略）
 //   conversation.input.right   — 「补 / 校」两个功能开关
+//   settings.plugin.item       — 设置页卡片（Settings → Plugins → 插件配置，
+//                                keyed by 命名空间；宿主 ui-settings-plugins
+//                                渲染卡片列表 = Host 已服务命名空间 ∩ 注册 key）
 //   镜像层（body 挂载）— 文中红字标注错字 + 光标后灰色 ghost 建议（NovAI 同款）
 //
 // 补全交互（v3 ghost text）：
@@ -28,10 +31,21 @@ import { createSnapshotStore, type SnapshotStore } from '@deepseek-ai/dsh-client
 import { NS, CHANNEL, DEFAULT_CONFIG, type InputAssistConfig } from './config.js'
 import { scanLocalTypos, type TypoIssue } from './proofread-dict.js'
 import { mergeIssues } from './proofread-llm.js'
+import {
+	SETTINGS_FIELDS,
+	stageValue,
+	unstageValue,
+	isFieldStaged,
+	fieldText,
+	fieldChecked,
+	parseStagedPatch,
+	type StagedEdits,
+} from './settings-form.js'
 
-// 测试出口：bundle 内的词典扫描行为守卫（test/client-bundle.test.js 经
+// 测试出口：bundle 内的词典扫描与设置表单行为守卫（test/*.test.js 经
 // ModuleLoader 壳取回），宿主运行时只消费 apply/inject，不受影响。
 export { scanLocalTypos }
+export { SETTINGS_FIELDS, stageValue, unstageValue, isFieldStaged, fieldText, fieldChecked, parseStagedPatch }
 
 export const inject = ['slots', 'locale', 'connection', 'remote']
 
@@ -51,6 +65,11 @@ interface CompleteResult {
 interface ProofreadResult {
 	issues?: TypoIssue[]
 }
+interface ModelsResult {
+	models?: string[]
+	reason?: string
+	message?: string
+}
 
 interface ConnectionService {
 	rpc: {
@@ -64,7 +83,9 @@ interface InjectedPayload {
 }
 interface SlotRegistration {
 	name: string
-	id: string
+	/** list 插座用 id 排序导航；keyed 插座（settings.plugin.item）用 key。 */
+	id?: string
+	key?: string
 	order: number
 	locale: string
 	inject?: () => InjectedPayload
@@ -214,6 +235,62 @@ const CSS = [
 	'.ia_typoCur{background:color-mix(in srgb,var(--dsw-alias-accent-danger,#e5484d) 18%,transparent)}',
 	// —— ghost text（内联补全，NovAI 风格）——
 	'.ia_ghost{color:var(--dsw-alias-label-tertiary)}',
+	// —— 设置页卡片（Settings → Plugins → 插件配置；与官方卡片同列表，
+	// 尺寸/字号/圆角/箭头全部对齐官方 PluginCard 的编译后 CSS，观感一致）——
+	'.ia_scard{border:1px solid var(--dsw-alias-border-l2);border-radius:12px;background:var(--dsw-alias-bg-layer-3);list-style:none;transition:border-color .16s,background .16s}',
+	'.ia_scard:hover{border-color:var(--dsw-alias-label-dimmed)}',
+	'.ia_scard.ia_open{background:var(--dsw-alias-bg-layer-2);border-color:var(--dsw-alias-label-dimmed)}',
+	'.ia_scardHead{appearance:none;display:flex;align-items:center;gap:12px;width:100%;box-sizing:border-box;padding:14px 16px;border:0;border-radius:12px;background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer}',
+	'.ia_scardHead:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:-2px}',
+	'.ia_scardText{display:flex;flex-direction:column;gap:4px;flex:1;min-width:0}',
+	'.ia_scardName{color:var(--dsw-alias-label-primary);font-size:15px;font-weight:600;line-height:1.4}',
+	'.ia_scardDesc{color:var(--dsw-alias-label-tertiary);font-size:13px;line-height:1.5;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+	'.ia_scardPending{flex:none;white-space:nowrap;background:var(--dsw-alias-bg-module-platform);color:var(--dsw-alias-label-secondary);border-radius:999px;padding:1px 8px;font-size:11px;font-weight:500;line-height:17px}',
+	'.ia_scardChev{flex:none;display:flex;color:var(--dsw-alias-label-tertiary);transition:transform .16s}',
+	'.ia_scardChev.ia_open{transform:rotate(180deg)}',
+	'.ia_scardBody{border-top:1px solid var(--dsw-alias-border-l2);margin:0 16px;padding:12px 0 8px;display:flex;flex-direction:column;gap:12px}',
+	'.ia_sgroup{color:var(--dsw-alias-label-secondary);font-size:12px;font-weight:600;line-height:1.5}',
+	'.ia_srows{display:flex;flex-direction:column;gap:12px}',
+	'.ia_srow{display:flex;align-items:center;gap:10px}',
+	'.ia_srowText{display:flex;flex-direction:column;gap:2px;flex:1;min-width:0}',
+	'.ia_srowLabel{display:flex;align-items:center;gap:5px;color:var(--dsw-alias-label-primary);font-size:13px;line-height:1.5}',
+	'.ia_srowHint{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:1.5}',
+	'.ia_sdot{width:6px;height:6px;border-radius:50%;background:#679efe;flex:none}',
+	'.ia_sInput{width:200px;max-width:42%;flex:none;box-sizing:border-box;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-module-platform);color:var(--dsw-alias-label-primary);font:inherit;font-size:13px;line-height:1.5;padding:5px 10px}',
+	'.ia_sInput:focus{outline:none;border-color:#679efe}',
+	'.ia_sInput.ia_sNum{width:96px;text-align:right;font-variant-numeric:tabular-nums}',
+	'.ia_sInput.ia_bad,.ia_sInput.ia_bad:focus{border-color:var(--dsw-alias-accent-danger,#e5484d)}',
+	'.ia_sbad{flex:none;color:var(--dsw-alias-accent-danger,#e5484d);font-size:11px;line-height:1.5}',
+	'.ia_sSwitch{position:relative;flex:none;width:34px;height:20px;padding:0;cursor:pointer;border:1px solid var(--dsw-alias-border-l2);border-radius:999px;background:var(--dsw-alias-bg-module-platform);transition:background-color .15s,border-color .15s}',
+	'.ia_sSwitch::after{content:"";position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:var(--dsw-alias-label-tertiary);transition:left .15s,background-color .15s}',
+	'.ia_sSwitch[aria-checked="true"]{background:#679efe;border-color:#679efe}',
+	'.ia_sSwitch[aria-checked="true"]::after{left:16px;background:#fff}',
+	'.ia_sReset{cursor:pointer;flex:none;border:none;background:transparent;color:var(--dsw-alias-label-tertiary);font:inherit;font-size:13px;line-height:1.5;padding:0 4px}',
+	'.ia_sReset:hover{color:var(--dsw-alias-label-primary)}',
+	// —— 模型组合框：输入框 + 同款方块下拉按钮 + 自定义面板 ——
+	'.ia_scombo{position:relative;flex:none;display:flex;gap:6px}',
+	'.ia_scombo .ia_sInput{width:172px;max-width:none}',
+	'.ia_sToggleBtn{flex:none;width:34px;height:32px;box-sizing:border-box;display:flex;align-items:center;justify-content:center;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-module-platform);color:var(--dsw-alias-label-secondary);cursor:pointer;transition:border-color .15s,color .15s}',
+	'.ia_sToggleBtn:hover:not(:disabled){color:var(--dsw-alias-label-primary);border-color:var(--dsw-alias-label-dimmed)}',
+	'.ia_sToggleBtn:disabled{opacity:.4;cursor:default}',
+	'.ia_sToggleBtn .ia_scardChev{display:flex;transition:transform .16s}',
+	'.ia_sToggleBtn .ia_scardChev.ia_open{transform:rotate(180deg)}',
+	'.ia_sMenu{position:absolute;top:calc(100% + 4px);right:0;z-index:40;width:252px;max-height:248px;overflow:auto;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-3);box-shadow:0 8px 24px rgba(0,0,0,.25);padding:4px}',
+	'.ia_sMenuHead{display:flex;align-items:center;padding:4px 8px 6px;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:1.5}',
+	'.ia_sMenuEmpty{padding:10px 8px;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:1.5}',
+	'.ia_sOpt{display:flex;width:100%;box-sizing:border-box;align-items:center;justify-content:space-between;gap:8px;border:none;border-radius:6px;background:transparent;color:var(--dsw-alias-label-primary);cursor:pointer;font:inherit;font-size:13px;line-height:1.5;padding:6px 8px;text-align:left}',
+	'.ia_sOpt:hover{background:var(--dsw-interactive-bg-hover)}',
+	'.ia_sOpt.ia_sel{color:#679efe}',
+	'.ia_sOptCheck{flex:none;display:flex}',
+	'.ia_smodelsNote{margin:0;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:1.5}',
+	'.ia_scardFoot{border-top:1px solid var(--dsw-alias-border-l2);display:flex;align-items:center;justify-content:flex-end;gap:8px;padding:12px 0 4px}',
+	'.ia_sfailed{min-width:0;flex:1;margin:0;color:var(--dsw-alias-label-error);font-size:12px;line-height:1.5}',
+	'.ia_sDiscard,.ia_sSave{appearance:none;cursor:pointer;font:inherit;border:1px solid transparent;border-radius:8px;padding:5px 14px;font-size:13px;line-height:1.5}',
+	'.ia_sDiscard{border-color:var(--dsw-alias-border-l2);color:var(--dsw-alias-label-secondary);background:transparent}',
+	'.ia_sDiscard:hover:not(:disabled){color:var(--dsw-alias-label-primary);border-color:var(--dsw-alias-label-dimmed)}',
+	'.ia_sSave{background:var(--dsw-alias-label-primary);color:var(--dsw-alias-bg-layer-3)}',
+	'.ia_sDiscard:disabled,.ia_sSave:disabled{opacity:.4;cursor:default}',
+	'.ia_sDiscard:focus-visible,.ia_sSave:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:1px}',
 ].join('')
 if (typeof document !== 'undefined' && document.querySelector('style[data-plugin-css=' + JSON.stringify('dsh-input-assist/ui.css') + ']') === null) {
 	const tag = document.createElement('style')
@@ -248,16 +325,21 @@ const loadConfig = async (): Promise<void> => {
 	}
 }
 
-const persistConfig = async (patch: Partial<InputAssistConfig>): Promise<void> => {
+// 乐观更新后写宿主；成功返回 true。失败时回读宿主真值撤销乐观值
+// （开关按钮与设置卡片共用此路，卡片的“保存失败”提示据此显示）。
+const persistConfig = async (patch: Partial<InputAssistConfig>): Promise<boolean> => {
 	configStore.set({ ...configStore.getSnapshot(), ...patch })
 	try {
 		const res = await rpc<Partial<InputAssistConfig>>('config.set', patch)
 		if (res !== undefined && res.ok === true && isObj(res.value)) {
 			configStore.set({ ...configStore.getSnapshot(), ...res.value })
+			return true
 		}
 	} catch (_err) {
-		/* 写失败保持乐观值 */
+		/* 网络层失败走下面的回读 */
 	}
+	await loadConfig()
+	return false
 }
 
 const debug = (patch: Record<string, unknown>): void => {
@@ -702,6 +784,327 @@ function ToggleControl({ useConfig, t, api }: SlotProps): react.ReactElement | n
 	)
 }
 
+// —— 设置页卡片（v5.1）——
+// 暂存编辑（staged）+ 统一保存/放弃，与官方兄弟卡片（Bash/AgentLoop/
+// WebSearch）交互同构：折叠卡片头（名称+描述+未保存标记），展开后分组
+// 字段行，底部放弃/保存；数字与必填文本本地校验，无效字段标红禁存。
+interface SettingsCardProps {
+	useConfig?: UseStore<InputAssistConfig>
+	t: Translate
+	api?: {
+		save(patch: Partial<InputAssistConfig>): Promise<boolean>
+		fetchModels(): Promise<RpcResult<ModelsResult> | undefined>
+	}
+}
+
+function SettingsCard(props: SettingsCardProps): react.ReactElement | null {
+	const { useConfig, t, api } = props
+	if (typeof useConfig !== 'function' || api === undefined) return null
+	const el = react.createElement
+	const cfg = useConfig(identity)
+	const [open, setOpen] = react.useState(false)
+	const [staged, setStaged] = react.useState<StagedEdits>({})
+	const [saving, setSaving] = react.useState(false)
+	const [failed, setFailed] = react.useState(false)
+	// 模型目录：两个模型字段共享；自定义下拉面板（点 ▾ 打开即拉最新目录，
+	// 外点/Esc 关闭；失败退回手填，输入框始终是自由文本）
+	const [models, setModels] = react.useState<string[]>([])
+	const [modelsState, setModelsState] = react.useState<'idle' | 'fetching' | 'failed'>('idle')
+	const [menuFor, setMenuFor] = react.useState<'completionModel' | 'proofreadModel' | null>(null)
+	const parsed = parseStagedPatch(staged)
+	const dirty = Object.keys(staged).length > 0
+	const blocked = !dirty || parsed.invalid.length > 0 || saving
+
+	const fetchModelList = async (): Promise<void> => {
+		if (api.fetchModels === undefined) return
+		setModelsState('fetching')
+		try {
+			const res = await api.fetchModels()
+			const value = res !== undefined && res.ok === true ? res.value : undefined
+			const list = Array.isArray(value?.models) ? value.models.filter((m): m is string => typeof m === 'string') : []
+			setModels(list)
+			setModelsState(list.length > 0 ? 'idle' : 'failed')
+		} catch (_err) {
+			setModelsState('failed')
+		}
+	}
+	const toggleMenu = (key: 'completionModel' | 'proofreadModel'): void => {
+		setMenuFor((prev) => {
+			const next = prev === key ? null : key
+			// 每次打开都拉最新目录（旧列表先展示，回来后原地替换）
+			if (next !== null) void fetchModelList()
+			return next
+		})
+	}
+	// 下拉面板：外点关闭、Esc 关闭（capture 监听只挂在面板打开期间）
+	react.useEffect(() => {
+		if (menuFor === null) return
+		const onDown = (event: MouseEvent): void => {
+			const target = event.target
+			if (target instanceof Element && target.closest('.ia_scombo') === null) setMenuFor(null)
+		}
+		const onKey = (event: KeyboardEvent): void => {
+			if (event.key === 'Escape') setMenuFor(null)
+		}
+		document.addEventListener('mousedown', onDown, true)
+		document.addEventListener('keydown', onKey, true)
+		return () => {
+			document.removeEventListener('mousedown', onDown, true)
+			document.removeEventListener('keydown', onKey, true)
+		}
+	}, [menuFor])
+
+	const edit = (key: keyof InputAssistConfig, value: string | boolean): void => {
+		setFailed(false)
+		setStaged((prev) => stageValue(prev, key, value))
+	}
+	const onSave = async (): Promise<void> => {
+		if (blocked) return
+		setSaving(true)
+		setFailed(false)
+		const ok = await api.save(parsed.patch)
+		setSaving(false)
+		if (ok) setStaged({})
+		else setFailed(true)
+	}
+
+	const group = (id: 'completion' | 'proofread'): react.ReactElement =>
+		el(
+			'div',
+			{ key: id },
+			el('div', { className: 'ia_sgroup' }, t(id === 'completion' ? 'settings.groupCompletion' : 'settings.groupProofread')),
+			el(
+				'div',
+				{ className: 'ia_srows' },
+				SETTINGS_FIELDS.filter((f) => f.group === id).map((spec) => {
+					const label = t(`settings.f.${spec.key}`)
+					// t() 对缺失键回返键名本身：提示文案缺失时干脆不渲染该行
+					const hintKey = `settings.h.${spec.key}`
+					const hint = t(hintKey)
+					const hintShown = hint !== '' && hint !== hintKey ? hint : ''
+					const changed = isFieldStaged(spec, staged)
+					const labelRow = el(
+						'span',
+						{ className: 'ia_srowLabel' },
+						label,
+						changed ? el('span', { key: 'dot', className: 'ia_sdot', title: t('settings.unsaved') }) : null,
+					)
+					const hintRow = hintShown === '' ? null : el('span', { className: 'ia_srowHint' }, hintShown)
+					const resetBtn = changed
+						? el('button', {
+								type: 'button',
+								key: 'reset',
+								className: 'ia_sReset',
+								title: t('settings.resetHint'),
+								'aria-label': `${t('settings.resetHint')}: ${label}`,
+								onClick: () => {
+									setFailed(false)
+									setStaged((prev) => unstageValue(prev, spec.key))
+								},
+							}, '×')
+						: null
+					if (spec.kind === 'toggle') {
+						const checked = fieldChecked(spec, staged, cfg)
+						return el(
+							'div',
+							{ key: spec.key, className: 'ia_srow' },
+							el('div', { className: 'ia_srowText' }, labelRow, hintRow),
+							el('button', {
+								type: 'button',
+								className: 'ia_sSwitch',
+								role: 'switch',
+								'aria-checked': checked ? 'true' : 'false',
+								'aria-label': label,
+								onClick: () => {
+									edit(spec.key, !checked)
+								},
+							}),
+							resetBtn,
+						)
+					}
+					const bad = changed && parsed.invalid.includes(spec.key)
+					const invalidText = t(spec.kind === 'number' ? 'settings.invalidNumber' : 'settings.invalidRequired')
+					// 模型字段：输入框 + 同款方块 ▾ 按钮 + 自定义下拉面板
+					if (spec.model === true) {
+						const curVal = fieldText(spec, staged, cfg)
+						const isOpen = menuFor === spec.key
+						const options = models.map((m) =>
+							el(
+								'button',
+								{
+									type: 'button',
+									key: m,
+									role: 'option',
+									className: `ia_sOpt${m === curVal ? ' ia_sel' : ''}`,
+									'aria-selected': m === curVal ? 'true' : 'false',
+									onClick: () => {
+										edit(spec.key, m)
+										setMenuFor(null)
+									},
+								},
+								el('span', null, m),
+								m === curVal
+									? el('span', { key: 'check', className: 'ia_sOptCheck', 'aria-hidden': 'true' }, '✓')
+									: null,
+							),
+						)
+						const menu = el(
+							'div',
+							{ key: 'menu', className: 'ia_sMenu', role: 'listbox', 'aria-label': t('settings.pickModel') },
+							el(
+								'div',
+								{ className: 'ia_sMenuHead' },
+								modelsState === 'fetching' ? t('settings.fetchingModels') : `${models.length} ${t('settings.modelsUnit')}`,
+							),
+							models.length > 0
+								? options
+								: el('div', { className: 'ia_sMenuEmpty' }, modelsState === 'failed' ? t('settings.modelsFailed') : t('settings.fetchingModels')),
+						)
+						return el(
+							'div',
+							{ key: spec.key, className: 'ia_srow' },
+							el('div', { className: 'ia_srowText' }, labelRow, hintRow),
+							el(
+								'div',
+								{ key: 'combo', className: 'ia_scombo' },
+								el('input', {
+									className: `ia_sInput${bad ? ' ia_bad' : ''}`,
+									type: 'text',
+									value: curVal,
+									'aria-label': label,
+									'aria-invalid': bad ? 'true' : undefined,
+									'aria-expanded': isOpen ? 'true' : 'false',
+									'aria-haspopup': 'listbox',
+									autoComplete: 'off',
+									spellCheck: false,
+									onChange: (event: { target: { value: string } }) => {
+										edit(spec.key, event.target.value)
+									},
+								}),
+								el(
+									'button',
+									{
+										type: 'button',
+										className: 'ia_sToggleBtn',
+										'aria-label': t('settings.pickModel'),
+										'aria-expanded': isOpen ? 'true' : 'false',
+										'aria-haspopup': 'listbox',
+										onClick: () => {
+											toggleMenu(spec.key)
+										},
+									},
+									el(
+										'span',
+										{ className: `ia_scardChev${isOpen ? ' ia_open' : ''}`, 'aria-hidden': 'true' },
+										el('svg', {
+											width: 14,
+											height: 14,
+											viewBox: '0 0 14 14',
+											fill: 'none',
+											xmlns: 'http://www.w3.org/2000/svg',
+										}, el('path', {
+											d: 'M11.8486 5.5L11.4238 5.92383L8.69727 8.65137C8.44157 8.90706 8.21562 9.13382 8.01172 9.29785C7.79912 9.46883 7.55595 9.61756 7.25 9.66602C7.08435 9.69222 6.91565 9.69222 6.75 9.66602C6.44405 9.61756 6.20088 9.46883 5.98828 9.29785C5.78438 9.13382 5.55843 8.90706 5.30273 8.65137L2.57617 5.92383L2.15137 5.5L3 4.65137L3.42383 5.07617L6.15137 7.80273C6.42595 8.07732 6.59876 8.24849 6.74023 8.3623C6.87291 8.46904 6.92272 8.47813 6.9375 8.48047C6.97895 8.48703 7.02105 8.48703 7.0625 8.48047C7.07728 8.47813 7.12709 8.46904 7.25977 8.3623C7.40124 8.24849 7.57405 8.07732 7.84863 7.80273L10.5762 5.07617L11 4.65137L11.8486 5.5Z',
+											fill: 'currentColor',
+										})),
+									),
+								),
+								isOpen ? menu : null,
+							),
+							bad ? el('span', { key: 'bad', className: 'ia_sbad' }, invalidText) : null,
+							// 模型行不放单行撤销（×）：选错再点一次下拉即可，整体撤销走「放弃修改」
+						)
+					}
+					return el(
+						'div',
+						{ key: spec.key, className: 'ia_srow' },
+						el('div', { className: 'ia_srowText' }, labelRow, hintRow),
+						el('input', {
+							className: `ia_sInput${spec.kind === 'number' ? ' ia_sNum' : ''}${bad ? ' ia_bad' : ''}`,
+							type: spec.password === true ? 'password' : 'text',
+							inputMode: spec.kind === 'number' ? 'numeric' : undefined,
+							value: fieldText(spec, staged, cfg),
+							'aria-label': label,
+							'aria-invalid': bad ? 'true' : undefined,
+							placeholder: spec.key === 'completionApiKey' ? t('settings.apiKeyPlaceholder') : undefined,
+							autoComplete: 'off',
+							spellCheck: false,
+							onChange: (event: { target: { value: string } }) => {
+								edit(spec.key, event.target.value)
+							},
+						}),
+						bad ? el('span', { key: 'bad', className: 'ia_sbad' }, invalidText) : null,
+						resetBtn,
+					)
+				}),
+			),
+		)
+
+	return el(
+		'li',
+		{ className: `ia_scard${open ? ' ia_open' : ''}`, 'data-input-assist': 'settings-card' },
+		el(
+			'button',
+			{
+				type: 'button',
+				className: 'ia_scardHead',
+				'aria-expanded': open ? 'true' : 'false',
+				'aria-label': `${t(open ? 'settings.collapse' : 'settings.expand')}: ${t('settings.title')}`,
+				onClick: () => {
+					setOpen(!open)
+				},
+			},
+			el(
+				'span',
+				{ className: 'ia_scardText' },
+				el('span', { className: 'ia_scardName' }, t('settings.title')),
+				el('span', { className: 'ia_scardDesc' }, t('settings.description')),
+			),
+			dirty ? el('span', { key: 'pending', className: 'ia_scardPending' }, t('settings.unsaved')) : null,
+			// 官方 IconChevronDownOutline14 原版 SVG（用户自官方页面拷贝，fill 填充式）
+			el(
+				'span',
+				{ key: 'chev', className: `ia_scardChev${open ? ' ia_open' : ''}`, 'aria-hidden': 'true' },
+				el('svg', {
+					width: 14,
+					height: 14,
+					viewBox: '0 0 14 14',
+					fill: 'none',
+					xmlns: 'http://www.w3.org/2000/svg',
+				}, el('path', {
+					d: 'M11.8486 5.5L11.4238 5.92383L8.69727 8.65137C8.44157 8.90706 8.21562 9.13382 8.01172 9.29785C7.79912 9.46883 7.55595 9.61756 7.25 9.66602C7.08435 9.69222 6.91565 9.69222 6.75 9.66602C6.44405 9.61756 6.20088 9.46883 5.98828 9.29785C5.78438 9.13382 5.55843 8.90706 5.30273 8.65137L2.57617 5.92383L2.15137 5.5L3 4.65137L3.42383 5.07617L6.15137 7.80273C6.42595 8.07732 6.59876 8.24849 6.74023 8.3623C6.87291 8.46904 6.92272 8.47813 6.9375 8.48047C6.97895 8.48703 7.02105 8.48703 7.0625 8.48047C7.07728 8.47813 7.12709 8.46904 7.25977 8.3623C7.40124 8.24849 7.57405 8.07732 7.84863 7.80273L10.5762 5.07617L11 4.65137L11.8486 5.5Z',
+					fill: 'currentColor',
+				})),
+			),
+		),
+		open
+			? el(
+					'div',
+					{ className: 'ia_scardBody' },
+					group('completion'),
+					group('proofread'),
+					modelsState === 'failed'
+						? el('p', { key: 'modelsNote', className: 'ia_smodelsNote', role: 'status' }, t('settings.modelsFailed'))
+						: null,
+					el(
+						'div',
+						{ className: 'ia_scardFoot' },
+						failed ? el('p', { key: 'failed', className: 'ia_sfailed', role: 'status' }, t('settings.saveFailed')) : null,
+						el(
+							'button',
+							{ type: 'button', className: 'ia_sDiscard', disabled: !dirty || saving, onClick: () => setStaged({}) },
+							t('settings.discard'),
+						),
+						el(
+							'button',
+							{ type: 'button', className: 'ia_sSave', disabled: blocked, onClick: () => void onSave() },
+							t(saving ? 'settings.saving' : 'settings.save'),
+						),
+					),
+				)
+			: null,
+	)
+}
+
 export function apply(ctx: PluginContext): void {
 	const slots = ctx.get('slots') as SlotsService | undefined
 	const locale = ctx.get('locale') as LocaleService | undefined
@@ -746,6 +1149,46 @@ export function apply(ctx: PluginContext): void {
 					'proofread.dismissHint': '本次输入不再提醒（Esc）',
 					'proofread.prevHint': '上一个（Ctrl+Shift+,）',
 					'proofread.nextHint': '下一个（Ctrl+Shift+.）',
+					// —— 设置页卡片 ——
+					'settings.title': '输入助手',
+					'settings.description': '输入补全（ghost text）与错别字检查',
+					'settings.unsaved': '未保存',
+					'settings.expand': '展开',
+					'settings.collapse': '收起',
+					'settings.groupCompletion': '输入补全',
+					'settings.groupProofread': '错别字检查',
+					'settings.save': '保存',
+					'settings.saving': '保存中…',
+					'settings.discard': '放弃修改',
+					'settings.saveFailed': '保存失败，请重试',
+					'settings.invalidNumber': '需为 0–60000 的整数',
+					'settings.invalidRequired': '不能为空',
+					'settings.resetHint': '清除该项的未保存修改',
+					'settings.apiKeyPlaceholder': '留空 = 复用 dsh 已存的 DEEPSEEK_API_KEY',
+				'settings.pickModel': '选择模型',
+					'settings.modelsUnit': '个可用模型',
+					'settings.fetchingModels': '拉取中…',
+					'settings.modelsFailed': '模型列表拉取失败（未配置 API Key 或端点不可达），可手动输入模型名',
+					'settings.f.completionEnabled': '启用输入补全',
+					'settings.h.completionEnabled': '停笔后显示灰色内联建议，Tab 逐词采纳（输入框「补」按钮同效）',
+					'settings.f.completionBaseUrl': 'FIM 端点',
+					'settings.h.completionBaseUrl': 'OpenAI 兼容端点，默认 DeepSeek beta',
+					'settings.f.completionApiKey': 'API Key',
+					'settings.h.completionApiKey': '优先于 dsh 已保存的 DEEPSEEK_API_KEY 与环境变量',
+					'settings.f.completionModel': '补全模型',
+					'settings.h.completionModel': 'FIM 请求使用的模型（/beta/completions）',
+					'settings.f.completionDebounceMs': '补全防抖（毫秒）',
+					'settings.h.completionDebounceMs': '停笔多久后请求建议',
+					'settings.f.completionMaxTokens': '建议长度上限（token）',
+					'settings.f.proofreadEnabled': '启用错别字检查',
+					'settings.h.proofreadEnabled': '文中红字标注、导航条逐条修正（输入框「校」按钮同效）',
+					'settings.f.proofreadUseLlm': '启用 LLM 检查层',
+					'settings.h.proofreadUseLlm': '上下文校对（在/再、的/得/地）；关闭则仅词典层本地检查，零成本',
+					'settings.f.proofreadModel': '检查模型',
+					'settings.h.proofreadModel': 'LLM 上下文校对使用的模型（chat 接口）',
+					'settings.f.proofreadDebounceMs': 'LLM 检查防抖（毫秒）',
+					'settings.f.proofreadDictDebounceMs': '词典检查防抖（毫秒）',
+					'settings.h.proofreadDictDebounceMs': '浏览器本地扫描，即时标红',
 				},
 				en: {
 					'toggle.completion':
@@ -763,6 +1206,46 @@ export function apply(ctx: PluginContext): void {
 					'proofread.dismissHint': 'Stop reminding for this draft (Esc)',
 					'proofread.prevHint': 'Previous (Ctrl+Shift+,)',
 					'proofread.nextHint': 'Next (Ctrl+Shift+.)',
+					// —— Settings card ——
+					'settings.title': 'Input Assist',
+					'settings.description': 'Inline completion (ghost text) & typo checking',
+					'settings.unsaved': 'Unsaved',
+					'settings.expand': 'Expand',
+					'settings.collapse': 'Collapse',
+					'settings.groupCompletion': 'Completion',
+					'settings.groupProofread': 'Typo checking',
+					'settings.save': 'Save',
+					'settings.saving': 'Saving…',
+					'settings.discard': 'Discard',
+					'settings.saveFailed': 'Save failed, please retry',
+					'settings.invalidNumber': 'Integer 0–60000 required',
+					'settings.invalidRequired': 'Must not be empty',
+					'settings.resetHint': 'Clear this pending edit',
+					'settings.apiKeyPlaceholder': 'Empty = reuse dsh-stored DEEPSEEK_API_KEY',
+				'settings.pickModel': 'Pick a model',
+					'settings.modelsUnit': 'available models',
+					'settings.fetchingModels': 'Fetching…',
+					'settings.modelsFailed': 'Could not fetch the model list (missing API key or unreachable endpoint); type a name manually',
+					'settings.f.completionEnabled': 'Enable completion',
+					'settings.h.completionEnabled': 'Gray inline suggestion after a pause; Tab accepts a word (same as the “补” button)',
+					'settings.f.completionBaseUrl': 'FIM endpoint',
+					'settings.h.completionBaseUrl': 'OpenAI-compatible endpoint; defaults to DeepSeek beta',
+					'settings.f.completionApiKey': 'API key',
+					'settings.h.completionApiKey': 'Takes precedence over the dsh-stored DEEPSEEK_API_KEY and env var',
+					'settings.f.completionModel': 'Completion model',
+					'settings.h.completionModel': 'Model for FIM requests (/beta/completions)',
+					'settings.f.completionDebounceMs': 'Completion debounce (ms)',
+					'settings.h.completionDebounceMs': 'How long to wait after typing before requesting',
+					'settings.f.completionMaxTokens': 'Suggestion length cap (tokens)',
+					'settings.f.proofreadEnabled': 'Enable typo checking',
+					'settings.h.proofreadEnabled': 'In-text red marks with a fix navigator (same as the “校” button)',
+					'settings.f.proofreadUseLlm': 'Enable LLM layer',
+					'settings.h.proofreadUseLlm': 'Context-aware checks (在/再, 的/得/地); off = dictionary-only local scan, zero cost',
+					'settings.f.proofreadModel': 'Checking model',
+					'settings.h.proofreadModel': 'Model for LLM context checks (chat API)',
+					'settings.f.proofreadDebounceMs': 'LLM debounce (ms)',
+					'settings.f.proofreadDictDebounceMs': 'Dictionary debounce (ms)',
+					'settings.h.proofreadDictDebounceMs': 'Browser-local scan, instant marks',
 				},
 			}),
 		'input-assist: dictionaries',
@@ -833,6 +1316,28 @@ export function apply(ctx: PluginContext): void {
 				}),
 			},
 			ToggleControl,
+		),
+	)
+
+	// 设置页卡片：宿主 ui-settings-plugins 在 Plugins → 插件配置 tab 按
+	// key（= 设置命名空间）派发；keyed 注册不带 id/order。数据通路复用
+	// 既有 /input-assist RPC（config.get 已在 apply 顶部加载，写走
+	// persistConfig 的乐观更新 + 失败回读），不引入新服务依赖。
+	slots.inject('settings.plugin.item', () =>
+		slots.register(
+			{
+				name: 'settings.plugin.item',
+				key: NS,
+				locale: NS,
+				inject: () => ({
+					hooks: { config: configStore },
+					api: {
+						save: (patch: Partial<InputAssistConfig>) => persistConfig(patch),
+						fetchModels: () => rpc<ModelsResult>('models.list', {}),
+					},
+				}),
+			},
+			SettingsCard,
 		),
 	)
 
