@@ -83,10 +83,10 @@ interface InjectedPayload {
 }
 interface SlotRegistration {
 	name: string
-	/** list 插座用 id 排序导航；keyed 插座（settings.plugin.item）用 key。 */
+	/** list 插座用 id 排序导航；keyed 插座（settings.plugin.item）用 key 且无序。 */
 	id?: string
 	key?: string
-	order: number
+	order?: number
 	locale: string
 	inject?: () => InjectedPayload
 }
@@ -810,7 +810,7 @@ function SettingsCard(props: SettingsCardProps): react.ReactElement | null {
 	// 外点/Esc 关闭；失败退回手填，输入框始终是自由文本）
 	const [models, setModels] = react.useState<string[]>([])
 	const [modelsState, setModelsState] = react.useState<'idle' | 'fetching' | 'failed'>('idle')
-	const [menuFor, setMenuFor] = react.useState<'completionModel' | 'proofreadModel' | null>(null)
+	const [menuFor, setMenuFor] = react.useState<keyof InputAssistConfig | null>(null)
 	const parsed = parseStagedPatch(staged)
 	const dirty = Object.keys(staged).length > 0
 	const blocked = !dirty || parsed.invalid.length > 0 || saving
@@ -828,7 +828,7 @@ function SettingsCard(props: SettingsCardProps): react.ReactElement | null {
 			setModelsState('failed')
 		}
 	}
-	const toggleMenu = (key: 'completionModel' | 'proofreadModel'): void => {
+	const toggleMenu = (key: keyof InputAssistConfig): void => {
 		setMenuFor((prev) => {
 			const next = prev === key ? null : key
 			// 每次打开都拉最新目录（旧列表先展示，回来后原地替换）
