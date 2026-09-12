@@ -165,3 +165,81 @@ test('models.list：拉取失败 ok 返回 reason 不走错误码', async () => 
 		globalThis.fetch = saved
 	}
 })
+
+// —— 在途取消（v0.5）：requestId 注册 + cancel 端点 + cancelled 错误码 ——
+// 仿真 fetch：挂起直到 signal abort，随后以 AbortError 拒绝（贴近真实 fetch）
+const hangOnAbortFetch = () => {
+	const saved = globalThis.fetch
+	globalThis.fetch = (_url, init) =>
+		new Promise((_resolve, reject) => {
+			const abort = () => {
+				const err = new Error('The operation was aborted')
+				err.name = 'AbortError'
+				reject(err)
+			}
+			if (init.signal.aborted) abort()
+			else init.signal.addEventListener('abort', abort)
+		})
+	return () => {
+		globalThis.fetch = saved
+	}
+}
+
+test('complete：cancel 断开在途请求，整单以 cancelled 错误码收场', async () => {
+	const restore = hangOnAbortFetch()
+	try {
+		const handler = makeHandler({ completionApiKey: 'sk-test' })
+		const pending = handler('complete', { prefix: '帮我写一段', suffix: '', requestId: 'req-1' })
+		const res = await handler('cancel', { requestId: 'req-1' })
+		assert.equal(res.ok, true)
+		assert.equal(res.value.cancelled, true)
+		const done = await pending
+		assert.equal(done.ok, false)
+		assert.equal(done.error.code, 'cancelled')
+		// settle 后注册表已摘除：再 cancel 同 id 幂等返回 false
+		const again = await handler('cancel', { requestId: 'req-1' })
+		assert.equal(again.ok, true)
+		assert.equal(again.value.cancelled, false)
+	} finally {
+		restore()
+	}
+})
+
+test('proofread：cancel 断开在途 LLM 请求并以 cancelled 收场', async () => {
+	const restore = hangOnAbortFetch()
+	try {
+		const handler = makeHandler({ completionApiKey: 'sk-test' })
+		const pending = handler('proofread', { text: '他迫不急待地想回家', llmOnly: true, requestId: 'req-2' })
+		const res = await handler('cancel', { requestId: 'req-2' })
+		assert.equal(res.ok, true)
+		assert.equal(res.value.cancelled, true)
+		const done = await pending
+		assert.equal(done.ok, false)
+		assert.equal(done.error.code, 'cancelled')
+	} finally {
+		restore()
+	}
+})
+
+test('complete：不带 requestId（旧客户端）照常工作，不注册不受 cancel 影响', async () => {
+	const saved = globalThis.fetch
+	globalThis.fetch = async () => ({ ok: true, json: async () => ({ choices: [{ text: '好的' }] }) })
+	try {
+		const handler = makeHandler({ completionApiKey: 'sk-test' })
+		const done = await handler('complete', { prefix: '帮我写', suffix: '' })
+		assert.equal(done.ok, true)
+		assert.equal(done.value.text, '好的')
+		const res = await handler('cancel', { requestId: 'whatever' })
+		assert.equal(res.ok, true)
+		assert.equal(res.value.cancelled, false)
+	} finally {
+		globalThis.fetch = saved
+	}
+})
+
+test('cancel：缺 requestId 报 internal（code 受传输层枚举限制）', async () => {
+	const handler = makeHandler()
+	const res = await handler('cancel', {})
+	assert.equal(res.ok, false)
+	assert.equal(res.error.code, 'internal')
+})

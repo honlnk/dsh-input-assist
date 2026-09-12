@@ -8,6 +8,7 @@
 // re-locates `orig` in the text itself, so a hallucinated offset can never
 // corrupt a click-to-fix edit.
 
+import { linkedTimeoutSignal } from './abort.ts'
 import type { TypoIssue } from './proofread-dict.js'
 
 const SYSTEM_PROMPT = [
@@ -111,38 +112,52 @@ export interface LlmProofreadArgs {
 	apiKey: string
 	model: string
 	text: string
+	/** External cancel signal (host cancel RPC); the timeout still applies on top. */
+	signal?: AbortSignal
 	timeoutMs?: number
 }
 
 /** Run the LLM typo check. */
-export async function llmProofread({ baseUrl, apiKey, model, text, timeoutMs = 12000 }: LlmProofreadArgs): Promise<RawIssue[]> {
+export async function llmProofread({
+	baseUrl,
+	apiKey,
+	model,
+	text,
+	signal,
+	timeoutMs = 12000,
+}: LlmProofreadArgs): Promise<RawIssue[]> {
 	const base = String(baseUrl || 'https://api.deepseek.com').replace(/\/+$/, '').replace(/\/beta$/, '')
-	const res = await fetch(`${base}/chat/completions`, {
-		method: 'POST',
-		headers: {
-			'content-type': 'application/json',
-			authorization: `Bearer ${apiKey}`,
-		},
-		body: JSON.stringify({
-			model,
-			messages: [
-				{ role: 'system', content: SYSTEM_PROMPT },
-				{ role: 'user', content: text },
-			],
-			temperature: 0,
-			max_tokens: 800,
-			response_format: { type: 'json_object' },
-		}),
-		signal: AbortSignal.timeout(timeoutMs),
-	})
-	if (!res.ok) {
-		const body = await res.text().catch(() => '')
-		const clip = body.length > 300 ? `${body.slice(0, 300)}…` : body
-		throw new Error(`proofread HTTP ${res.status}: ${clip}`)
+	const linked = linkedTimeoutSignal(timeoutMs, signal)
+	try {
+		const res = await fetch(`${base}/chat/completions`, {
+			method: 'POST',
+			headers: {
+				'content-type': 'application/json',
+				authorization: `Bearer ${apiKey}`,
+			},
+			body: JSON.stringify({
+				model,
+				messages: [
+					{ role: 'system', content: SYSTEM_PROMPT },
+					{ role: 'user', content: text },
+				],
+				temperature: 0,
+				max_tokens: 800,
+				response_format: { type: 'json_object' },
+			}),
+			signal: linked.signal,
+		})
+		if (!res.ok) {
+			const body = await res.text().catch(() => '')
+			const clip = body.length > 300 ? `${body.slice(0, 300)}…` : body
+			throw new Error(`proofread HTTP ${res.status}: ${clip}`)
+		}
+		const data = (await res.json()) as { choices?: { message?: { content?: string } }[] }
+		const content = data?.choices?.[0]?.message?.content ?? ''
+		return parseIssuesJson(content)
+	} finally {
+		linked.dispose()
 	}
-	const data = (await res.json()) as { choices?: { message?: { content?: string } }[] }
-	const content = data?.choices?.[0]?.message?.content ?? ''
-	return parseIssuesJson(content)
 }
 
 /**

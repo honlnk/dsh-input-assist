@@ -6,6 +6,10 @@
 // text / message.content / delta.content triple read — proxies have been
 // observed rewriting legacy completions into chat-shaped payloads.
 
+// 注：本模块会被 node --test 直接按 .ts 加载（类型剥离），跨模块值引用
+// 必须写 .ts 指定符；构建侧 tsdown/rolldown 同样原生解析。
+import { linkedTimeoutSignal } from './abort.ts'
+
 /** Read the completion text out of a legacy-completions response body. */
 export function extractCompletionText(data: unknown): string {
 	if (data === null || typeof data !== 'object') return ''
@@ -50,6 +54,8 @@ export interface FimRequestArgs {
 	/** Text after the caret ('' allowed). */
 	suffix: string
 	maxTokens?: number
+	/** External cancel signal (host cancel RPC); the timeout still applies on top. */
+	signal?: AbortSignal
 	timeoutMs?: number
 }
 
@@ -62,32 +68,38 @@ export async function requestFimCompletion({
 	suffix,
 	maxTokens = 64,
 	timeoutMs = 8000,
+	signal,
 }: FimRequestArgs): Promise<string> {
 	const base = String(baseUrl || 'https://api.deepseek.com/beta').replace(/\/+$/, '')
-	const res = await fetch(`${base}/completions`, {
-		method: 'POST',
-		headers: {
-			'content-type': 'application/json',
-			authorization: `Bearer ${apiKey}`,
-		},
-		body: JSON.stringify({
-			model,
-			prompt,
-			suffix: suffix || '',
-			stream: false,
-			max_tokens: maxTokens,
-			temperature: 0.2,
-			stop: ['\n'],
-		}),
-		signal: AbortSignal.timeout(timeoutMs),
-	})
-	if (!res.ok) {
-		const body = await res.text().catch(() => '')
-		const clip = body.length > 300 ? `${body.slice(0, 300)}…` : body
-		throw new Error(`FIM HTTP ${res.status}: ${clip}`)
+	const linked = linkedTimeoutSignal(timeoutMs, signal)
+	try {
+		const res = await fetch(`${base}/completions`, {
+			method: 'POST',
+			headers: {
+				'content-type': 'application/json',
+				authorization: `Bearer ${apiKey}`,
+			},
+			body: JSON.stringify({
+				model,
+				prompt,
+				suffix: suffix || '',
+				stream: false,
+				max_tokens: maxTokens,
+				temperature: 0.2,
+				stop: ['\n'],
+			}),
+			signal: linked.signal,
+		})
+		if (!res.ok) {
+			const body = await res.text().catch(() => '')
+			const clip = body.length > 300 ? `${body.slice(0, 300)}…` : body
+			throw new Error(`FIM HTTP ${res.status}: ${clip}`)
+		}
+		const data: unknown = await res.json()
+		return normalizeSuggestion(extractCompletionText(data), 200, prompt)
+	} finally {
+		linked.dispose()
 	}
-	const data: unknown = await res.json()
-	return normalizeSuggestion(extractCompletionText(data), 200, prompt)
 }
 
 /**

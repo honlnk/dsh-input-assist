@@ -13,6 +13,8 @@
 //   建议以灰字内联在光标后；Tab 逐词采纳（Intl.Segmenter 中文分词）、
 //   Shift+Tab 全量采纳、Esc 关闭；逐词采纳期间不重调度（justAccepted 守卫），
 //   吃光后自动再请求一轮。IME 组合期一律放行。
+//   在途取消（v0.5）：重新输入重调度 / Esc / 关开关时发 cancel RPC 让
+//   host 断开未完成的请求（序号守卫只丢结果，cancel 才省 token）。
 //
 // 错别字交互（v2）：
 //   检出后导航条出现，当前选中的错字在文本中加重高亮（红字 + 底色），
@@ -388,12 +390,55 @@ const debug = (patch: Record<string, unknown>): void => {
 // —— 调度：三路独立防抖，结果带 rev 戳防陈旧 ——
 //   dict 层本地扫描（proofreadDictDebounceMs，默认 200ms，零成本即时标红）
 //   completion / LLM 校对统一 800ms，两个 AI 请求几乎同时发出同时回来
+//   重调度 / Esc / 关开关时对在途 AI 请求发 cancel：序号守卫只管过期结果
+//   不显示，cancel 才真正断开连接（否则服务端照常生成、照常计费）
 let completionTimer: ReturnType<typeof setTimeout> | undefined
 let dictTimer: ReturnType<typeof setTimeout> | undefined
 let llmTimer: ReturnType<typeof setTimeout> | undefined
 let completionSeq = 0
 let dictSeq = 0
 let llmSeq = 0
+
+// —— 在途取消（v0.5）——
+// 每次出站 complete/proofread 带上 requestId，host 侧登记 AbortController；
+// 结果不再需要时发 cancel 端点断开。多标签页共用同一 host 实例，
+// requestId 带随机段保证跨标签页不撞号（自增序号仅便于日志辨认）。
+let requestSeq = 0
+let completionReqId = ''
+let llmReqId = ''
+// 补全本轮是否在排队（防抖定时器待发）：Esc/关开关要连排队轮一起作废，
+// 只取消已发出的请求会漏掉防抖窗口——请求随后照发，ghost 仍会迟到上屏。
+let completionTimerPending = false
+
+const nextRequestId = (kind: 'c' | 'l'): string => {
+	requestSeq += 1
+	const rand =
+		typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+			? crypto.randomUUID()
+			: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
+	return `${kind}${requestSeq}-${rand}`
+}
+
+// 尽力而为：host 是不带 cancel 的旧版本、或网络瞬断，都静默放过
+const cancelRpc = (requestId: string): void => {
+	if (requestId === '' || connectionRef === null) return
+	void rpc('cancel', { requestId }).catch(() => {})
+}
+
+/** 本轮补全是否仍可能产出建议（排队或请求在途）。 */
+const completionRoundActive = (): boolean => completionTimerPending || completionReqId !== ''
+
+/** 彻底作废本轮补全：清排队定时器、断在途请求、作废迟到响应。 */
+const abortCompletionRound = (): void => {
+	clearTimeout(completionTimer)
+	completionTimerPending = false
+	completionSeq += 1
+	if (completionReqId !== '') {
+		cancelRpc(completionReqId)
+		completionReqId = ''
+	}
+	setAssist({ suggestion: '', fetching: false, sugRev: -1 })
+}
 
 // 最近一次草稿（rescanDict 用：用户词库保存后按新词库立即重扫，不等防抖）
 let lastDraft = ''
@@ -639,15 +684,26 @@ function onDraftChanged(draft: string, rev: number): void {
 		assistStore.getSnapshot().suggestion !== '' && assistStore.getSnapshot().sugDraft === draft
 
 	clearTimeout(completionTimer)
+	completionTimerPending = false
+	cancelRpc(completionReqId)
+	completionReqId = ''
 	completionSeq += 1
 	const cSeq = completionSeq
 	if (!completionActive) {
 		setAssist({ suggestion: '', fetching: false, sugRev: -1 })
 	} else if (!justAccepted) {
 		completionTimer = setTimeout(async () => {
+			completionTimerPending = false
+			const reqId = nextRequestId('c')
+			completionReqId = reqId
+			debug({ completionReqId: reqId }) // 调试探针：请求在途窗口可观测（控制台/__iaDebug）
 			setAssist({ fetching: true })
 			try {
-				const res = await rpc<CompleteResult>('complete', { prefix: draft.slice(0, caret), suffix: draft.slice(caret) })
+				const res = await rpc<CompleteResult>('complete', {
+					prefix: draft.slice(0, caret),
+					suffix: draft.slice(caret),
+					requestId: reqId,
+				})
 				debug({ completionRes: res })
 				if (cSeq !== completionSeq) return
 				if (res !== undefined && res.ok === true) {
@@ -661,6 +717,8 @@ function onDraftChanged(draft: string, rev: number): void {
 						error: reason,
 						errorRev: reason === '' ? -1 : rev,
 					})
+				} else if (res !== undefined && res.ok === false && res.error.code === 'cancelled') {
+					// 主动取消（Esc / 关开关 / 取消竞态）：静默，不写状态不弹错误条
 				} else {
 					setAssist({
 						suggestion: '',
@@ -672,8 +730,11 @@ function onDraftChanged(draft: string, rev: number): void {
 			} catch (err) {
 				debug({ completionErr: err instanceof Error ? err.message : String(err) })
 				if (cSeq === completionSeq) setAssist({ suggestion: '', fetching: false })
+			} finally {
+				if (completionReqId === reqId) completionReqId = ''
 			}
-		}, cfg.completionDebounceMs)
+			}, cfg.completionDebounceMs)
+		completionTimerPending = true
 	}
 
 	// —— 错别字：两层拆分 ——
@@ -682,6 +743,8 @@ function onDraftChanged(draft: string, rev: number): void {
 	const proofActive = cfg.proofreadEnabled && draft.trim().length >= 4
 	clearTimeout(dictTimer)
 	clearTimeout(llmTimer)
+	cancelRpc(llmReqId)
+	llmReqId = ''
 	dictSeq += 1
 	llmSeq += 1
 	const dSeq = dictSeq
@@ -695,11 +758,14 @@ function onDraftChanged(draft: string, rev: number): void {
 		}, cfg.proofreadDictDebounceMs)
 		if (cfg.proofreadUseLlm !== false) {
 			llmTimer = setTimeout(async () => {
+				const reqId = nextRequestId('l')
+				llmReqId = reqId
 				setAssist({ checking: true })
 				try {
-					const res = await rpc<ProofreadResult>('proofread', { text: draft, llmOnly: true })
+					const res = await rpc<ProofreadResult>('proofread', { text: draft, llmOnly: true, requestId: reqId })
 					debug({ proofRes: res })
 					if (pSeq !== llmSeq) return
+					if (res !== undefined && res.ok === false && res.error.code === 'cancelled') return
 					setAssist({
 						llmIssues: res !== undefined && res.ok === true && Array.isArray(res.value?.issues) ? res.value.issues : [],
 						issueRev: rev,
@@ -707,6 +773,8 @@ function onDraftChanged(draft: string, rev: number): void {
 					})
 				} catch (_err) {
 					if (pSeq === llmSeq) setAssist({ checking: false })
+				} finally {
+					if (llmReqId === reqId) llmReqId = ''
 				}
 			}, cfg.proofreadDebounceMs)
 		} else {
@@ -1692,6 +1760,30 @@ export function apply(ctx: PluginContext): void {
 			'input-assist: settings document watcher',
 		)
 	}
+	// 关开关（按钮 / 设置卡片 / settings.yaml 热同步，任一路径最终都写进
+	// configStore）时：断开在途请求、作废迟到响应——关掉后 ghost 不复活、
+	// 不弹错误条；重开时也不会冒出关掉前那一刻的旧建议。
+	let lastCfg = configStore.getSnapshot()
+	ctx.effect(
+		() =>
+			configStore.subscribe(() => {
+				const cfg = configStore.getSnapshot()
+			if (lastCfg.completionEnabled && !cfg.completionEnabled) {
+				abortCompletionRound()
+			}
+			if (
+				(lastCfg.proofreadEnabled && !cfg.proofreadEnabled) ||
+				(lastCfg.proofreadUseLlm !== false && cfg.proofreadUseLlm === false)
+			) {
+				clearTimeout(llmTimer)
+				cancelRpc(llmReqId)
+				llmReqId = ''
+				llmSeq += 1
+			}
+				lastCfg = cfg
+			}),
+		'input-assist: cancel on disable',
+	)
 	loadConfig()
 
 	// 滚动/缩放时重同步镜像层与 dock 行宽（capture 捕获 textarea 滚动）
@@ -1768,11 +1860,25 @@ export function apply(ctx: PluginContext): void {
 
 		// —— 补全 Tab 逐词采纳 / Esc（建议优先）——
 		if (assist.suggestion === '' || assist.sugDraft !== target.value) {
-			// 无建议时 Esc 仍可忽略本次错别字提醒
-			if (e.key === 'Escape' && navActive()) {
-				e.preventDefault()
-				e.stopPropagation()
-				setAssist({ dismissedRev: assistStore.getSnapshot().issueRev })
+			if (e.key === 'Escape') {
+				// 无可见建议时 Esc：忽略本次错别字提醒（如有检出）；
+				// 补全本轮（排队或在途）一并作废——否则迟到响应会把 ghost 凭空弹出
+				let handled = false
+				if (navActive()) {
+					// LLM 校对也在途的话同时断掉：用户已表态“本次不再提醒”
+					cancelRpc(llmReqId)
+					llmReqId = ''
+					setAssist({ dismissedRev: assistStore.getSnapshot().issueRev })
+					handled = true
+				}
+				if (completionRoundActive()) {
+					abortCompletionRound()
+					handled = true
+				}
+				if (handled) {
+					e.preventDefault()
+					e.stopPropagation()
+				}
 			}
 			return
 		}
@@ -1807,7 +1913,9 @@ export function apply(ctx: PluginContext): void {
 		if (e.key === 'Escape') {
 			e.preventDefault()
 			e.stopPropagation()
-			setAssist({ suggestion: '', fetching: false, sugRev: -1 })
+			// 建议可见时 Esc：关建议并把本轮（排队/在途）彻底作废，
+			// 迟到响应不会把 ghost 再弹回来
+			abortCompletionRound()
 		}
 	}
 	ctx.effect(() => {

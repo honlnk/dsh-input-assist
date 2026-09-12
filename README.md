@@ -105,6 +105,7 @@ npm test        # build → tsc --noEmit → node --test（类型错在本地即
 - [docs/09-词库外置与自定义词库-实施记录.md](./docs/09-词库外置与自定义词库-实施记录.md) — 词库外置实施记录：data/ + gen-dict 生成器、合并扫描语义、设置卡片词库区块
 - [docs/10-英文拼写检查-实施记录.md](./docs/10-英文拼写检查-实施记录.md) — 英文拼写检查实施记录：错拼/专名词典、词边界扫描、LLM 层中英混排
 - [docs/11-自定义词库列表编辑器-实施记录.md](./docs/11-自定义词库列表编辑器-实施记录.md) — 自定义词库列表编辑器实施记录：pairs 编辑视图、拖拽 + FLIP 动画、按钮对合并
+- [docs/12-在途请求取消-实施记录.md](./docs/12-在途请求取消-实施记录.md) — 在途请求取消实施记录：requestId + cancel 端点、cancelled 错误码、触发点与兼容性
 
 ## 架构一览
 
@@ -113,6 +114,7 @@ npm test        # build → tsc --noEmit → node --test（类型错在本地即
   input.overlay  仅错误提示（无浮层）     loopback    settings 命名空间 input-assist
   input.dock     错别字面板+修正      ───RPC /input-assist───▶  complete   → FIM /beta/completions
   input.right    补/校 开关                             proofread → LLM 层（llmOnly）
+                                                        cancel     → 断开在途请求（重调度/Esc/关开关）
   settings.plugin.item  设置页卡片（Plugins→插件配置）    config.get/set → 设置文档读写
   useInput 读草稿 · inputActions.setDraft 写回
   镜像层（body 挂载）：文中红字 + 光标后灰色 ghost 建议
@@ -131,8 +133,9 @@ npm test        # build → tsc --noEmit → node --test（类型错在本地即
 - [x] 模型目录拉取（models.list RPC + 下拉建议组合箱；默认模型迁移 deepseek-flash）
 - [x] 词库外置与自定义词库（data/ 纯文本词库 + gen-dict 生成器 + CI 同步守卫；浏览器 localStorage 自定义词库、设置卡片区块编辑）
 - [x] 英文拼写检查（错拼 + 专名大小写词典、词边界扫描；LLM 层中英混排校对）
-- [ ] 真实 Chrome 手感验收：快捷键实测（点击、设置卡片、词库区块已于 2026-09-12 dsh 真机验证）
-- [ ] 流式中途取消
+- [x] 真实 Chrome 手感验收：快捷键实测（2026-09-13 通过；点击、设置卡片、词库区块已于 2026-09-12 dsh 真机验证）
+- [x] 在途请求取消（重新输入重调度 / Esc / 关开关即断开未完成的补全与 LLM 校对请求，迟到响应不复活、不白烧 token；2026-09-13 真机验证通过，含防抖窗口内 Esc）
+- [ ] 流式渐进渲染（SSE 首 token 渐显；取消链路已就绪，见 docs/12）
 
 ## 发布流程
 

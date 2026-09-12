@@ -8,6 +8,8 @@
 //      proofread               — LLM check (the offline dictionary layer runs
 //                                browser-side; pass llmOnly: true to skip the
 //                                host-side scan kept for legacy callers)
+//      cancel                  — abort an in-flight complete/proofread by
+//                                requestId (browser reschedules / Esc / toggle)
 //    All outbound API calls happen host-side: no browser CORS concerns, and
 //    the API key never crosses into page storage.
 
@@ -60,6 +62,10 @@ type RpcOk<T> = { ok: true; value: T }
 export type RpcResult<T> = RpcOk<T> | RpcError
 
 const rpcError = (message: string): RpcError => ({ ok: false, error: { code: 'internal', message, details: {} } })
+
+// 客户端主动取消（cancel 端点断开了在途请求）。'cancelled' 在传输层错误码
+// 枚举内（见上注），浏览器侧据此静默收场、不弹错误条。
+const rpcCancelled = (): RpcError => ({ ok: false, error: { code: 'cancelled', message: 'request cancelled by client', details: {} } })
 
 /**
  * Resolve the effective API key: the plugin's own setting first, then the
@@ -121,6 +127,11 @@ export interface ModelsValue {
  * endpoint without a real cordis context.
  */
 export function createHandler({ getConfig, updateConfig }: HandlerDeps) {
+	// 在途 complete/proofread 请求注册表：key 为客户端生成的 requestId，
+	// 请求 settle 后自动摘除，cancel 端点按 id 断开。多标签页共用同一
+	// host 实例，故必须按请求粒度取消而非“取消全部”。不带 requestId 的
+	// 旧客户端不注册，行为与旧版一致（只剩超时兜底）。
+	const inflight = new Map<string, AbortController>()
 	return async function handler(endpoint: string, payload: unknown): Promise<RpcResult<unknown>> {
 		if (endpoint === 'config.get') {
 			return { ok: true, value: getConfig() }
@@ -151,6 +162,9 @@ export function createHandler({ getConfig, updateConfig }: HandlerDeps) {
 			const prompt = typeof body.prefix === 'string' ? body.prefix.slice(-2000) : ''
 			const suffix = typeof body.suffix === 'string' ? body.suffix.slice(0, 500) : ''
 			if (prompt.trim().length < 2) return { ok: true, value: { text: '' } satisfies CompleteValue }
+			const requestId = typeof body.requestId === 'string' ? body.requestId : ''
+			const cancelSignal = new AbortController()
+			if (requestId !== '') inflight.set(requestId, cancelSignal)
 			try {
 				const text = await requestFimCompletion({
 					baseUrl: cfg.completionBaseUrl,
@@ -159,10 +173,14 @@ export function createHandler({ getConfig, updateConfig }: HandlerDeps) {
 					prompt,
 					suffix,
 					maxTokens: clampNumber(cfg.completionMaxTokens, 8, 512, DEFAULT_CONFIG.completionMaxTokens),
+					signal: cancelSignal.signal,
 				})
 				return { ok: true, value: { text } satisfies CompleteValue }
 			} catch (error) {
+				if (cancelSignal.signal.aborted) return rpcCancelled()
 				return rpcError(error instanceof Error ? error.message : String(error))
+			} finally {
+				if (requestId !== '') inflight.delete(requestId)
 			}
 		}
 		if (endpoint === 'proofread') {
@@ -179,20 +197,38 @@ export function createHandler({ getConfig, updateConfig }: HandlerDeps) {
 			if (cfg.proofreadEnabled !== false && cfg.proofreadUseLlm !== false) {
 				const apiKey = resolveApiKey(cfg)
 				if (apiKey) {
+					const requestId = typeof body.requestId === 'string' ? body.requestId : ''
+					const cancelSignal = new AbortController()
+					if (requestId !== '') inflight.set(requestId, cancelSignal)
 					try {
 						const raw = await llmProofread({
 							baseUrl: cfg.completionBaseUrl,
 							apiKey,
 							model: cfg.proofreadModel,
 							text,
+							signal: cancelSignal.signal,
 						})
 						llmIssues = locateIssues(raw, text)
 					} catch {
-						// LLM 层失败不影响词典层结果
+						// 客户端主动取消：整单以 cancelled 收场（词典层结果一并放弃，
+						// 现网客户端总带 llmOnly，词典层本就为空）
+						if (cancelSignal.signal.aborted) return rpcCancelled()
+						// 其他 LLM 层失败不影响词典层结果
+					} finally {
+						if (requestId !== '') inflight.delete(requestId)
 					}
 				}
 			}
 			return { ok: true, value: { issues: mergeIssues(local, llmIssues) } satisfies ProofreadValue }
+		}
+		if (endpoint === 'cancel') {
+			const body = isPlainObject(payload) ? payload : {}
+			const requestId = typeof body.requestId === 'string' ? body.requestId : ''
+			if (requestId === '') return rpcError('cancel: requestId required')
+			const controller = inflight.get(requestId)
+			if (controller !== undefined) controller.abort()
+			// 未知 id（已 settle / 从未注册 / 旧请求）幂等返回 false，不报错
+			return { ok: true, value: { cancelled: controller !== undefined } }
 		}
 		if (endpoint === 'models.list') {
 			// OpenAI 兼容目录接口（GET {platform}/models）：失败一律 ok+reason

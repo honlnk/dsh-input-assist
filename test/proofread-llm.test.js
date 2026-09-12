@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { parseIssuesJson, locateIssues, mergeIssues } from '../src/proofread-llm.ts'
+import { parseIssuesJson, locateIssues, mergeIssues, llmProofread } from '../src/proofread-llm.ts'
 
 test('解析 ```json 围栏输出', () => {
 	const raw = '```json\n{"issues":[{"orig":"在说","fix":"再说","reason":"时间副词"}]}\n```'
@@ -64,4 +64,27 @@ test('mergeIssues：LLM 结果与词典重叠时词典优先', () => {
 	assert.equal(merged.length, 2)
 	assert.equal(merged[0].orig, '在说')
 	assert.equal(merged[1].source, 'dict')
+})
+
+// —— 在途取消：外部 signal 经 llmProofread 端到端 ——
+test('llmProofread：外部信号 abort 后以 AbortError 拒绝', async () => {
+	const saved = globalThis.fetch
+	globalThis.fetch = (_url, init) =>
+		new Promise((_resolve, reject) => {
+			const abort = () => {
+				const err = new Error('The operation was aborted')
+				err.name = 'AbortError'
+				reject(err)
+			}
+			if (init.signal.aborted) abort()
+			else init.signal.addEventListener('abort', abort)
+		})
+	try {
+		const external = new AbortController()
+		const pending = llmProofread({ baseUrl: '', apiKey: 'k', model: 'm', text: '我在说一下', signal: external.signal })
+		external.abort()
+		await assert.rejects(pending, (err) => err instanceof Error && err.name === 'AbortError')
+	} finally {
+		globalThis.fetch = saved
+	}
 })
