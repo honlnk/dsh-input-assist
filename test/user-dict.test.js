@@ -47,6 +47,16 @@ test('parseDictText：容错收集错误行（不抛），合法行照常进词�
 	assert.deepEqual(errors[1], { line: 5, message: '错词为空或含空白' })
 })
 
+test('parseDictText：正词允许单个空格（alot => a lot），拒绝连续空白', () => {
+	const { phrases, errors } = parseDictText('alot => a lot')
+	assert.deepEqual(phrases, { alot: 'a lot' })
+	assert.deepEqual(errors, [])
+	assert.equal(parseDictText('a => b  c').errors[0].message, '正词为空或含连续空白')
+	// 英文修正端到端：合并进 EN 表后可检出
+	const dict = mergeDicts(BUILTIN_DICT, phrases)
+	assert.ok(scanWithDict('i alot these', dict).some((i) => i.orig === 'alot' && i.fix === 'a lot'))
+})
+
 test('parseDictText：接受自映射（用户禁用语义），扫描时跳过', () => {
 	const { phrases } = parseDictText('迫不急待 => 迫不急待')
 	assert.deepEqual(phrases, { 迫不急待: '迫不急待' })

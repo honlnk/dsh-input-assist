@@ -3,7 +3,6 @@
 // 数字字段的 0..60000 整数边界与 host 侧 clampNumber 钳制保持一致。
 
 import type { InputAssistConfig } from './config.js'
-import { parseDictText } from './proofread-dict.js'
 
 export type SettingsFieldKind = 'toggle' | 'string' | 'number'
 
@@ -101,30 +100,75 @@ export function parseStagedPatch(staged: StagedEdits): StagedPatchResult {
 }
 
 // —— 用户自定义词库区块（仅本浏览器，localStorage；独立于上方配置暂存流） ——
+// UI 是成对词条列表（错词/正词两列输入框），存储仍是行式文本
+// （`错词 => 正词`，与导入导出、扫描路径 parseDictText 共用同一格式）。
 
 export const USER_DICT_MAX_ENTRIES = 2000
 export const USER_DICT_MAX_WORD_LEN = 16
 
-export interface UserDictCheck {
-	/** 解析成功的词条数（去重后）。 */
+/** 一行词条（id 由组件分配，供 React key 与 FLIP 行定位；纯逻辑忽略）。 */
+export interface UserDictPair {
+	wrong: string
+	right: string
+}
+
+export type UserDictPairIssueCode = 'blank' | 'wrongSpace' | 'rightSpace' | 'tooLong' | 'dup'
+
+export interface UserDictPairsCheck {
+	/** 去空行后的有效词条数。 */
 	entries: number
-	/** 可直接渲染的错误信息（已带「第 N 行」前缀）。 */
-	errors: string[]
+	/** 行号 → 首个命中的错误码（一行只报一个，就近修复）。 */
+	issues: Array<{ row: number; code: UserDictPairIssueCode }>
+	/** 词条数超上限（与 issues 分开，错误文案挂在区块级而非行级）。 */
+	overflow: boolean
 	ok: boolean
 }
 
-/** 编辑器文本 → 保存校验：行式语法错误 + 错词长度 + 词条数上限。 */
-export function checkUserDictText(text: string): UserDictCheck {
-	const { phrases, errors } = parseDictText(text)
-	const out = errors.map((e) => `第 ${e.line} 行：${e.message}`)
-	for (const wrong of Object.keys(phrases)) {
-		if (wrong.length > USER_DICT_MAX_WORD_LEN) {
-			out.push(`词条「${wrong}」超过 ${USER_DICT_MAX_WORD_LEN} 字`)
+/** 已存文本 → 有序词条对：注释/空行跳过；非法行静默丢弃（保存时已校验过，只可能是手改 localStorage）。 */
+export function parseUserDictPairs(text: string): UserDictPair[] {
+	const out: UserDictPair[] = []
+	for (const raw of String(text ?? '').split(/\r?\n/)) {
+		const line = raw.trim()
+		if (line === '' || line.startsWith('#')) continue
+		const idx = line.indexOf('=>')
+		if (idx === -1) continue
+		const wrong = line.slice(0, idx).trim()
+		const right = line.slice(idx + 2).trim()
+		if (wrong === '' || right === '' || /\s/.test(wrong) || /\s{2,}/.test(right)) continue
+		out.push({ wrong, right })
+	}
+	return out
+}
+
+/** 词条对 → 存储文本：两侧全空的行跳过，其余 trim 后成行（保持列表顺序）。 */
+export function serializeUserDictPairs(pairs: readonly UserDictPair[]): string {
+	return pairs
+		.map((p) => ({ wrong: p.wrong.trim(), right: p.right.trim() }))
+		.filter((p) => p.wrong !== '' || p.right !== '')
+		.map((p) => `${p.wrong} => ${p.right}`)
+		.join('\n')
+}
+
+/** 列表校验：按 trim 后的值检查（与保存时序列化的内容一致）。 */
+export function checkUserDictPairs(pairs: readonly UserDictPair[]): UserDictPairsCheck {
+	const issues: UserDictPairsCheck['issues'] = []
+	const seen = new Map<string, number>()
+	let entries = 0
+	for (let i = 0; i < pairs.length; i += 1) {
+		const wrong = pairs[i].wrong.trim()
+		const right = pairs[i].right.trim()
+		if (wrong === '' && right === '') continue
+		if (wrong === '' || right === '') {
+			issues.push({ row: i, code: 'blank' })
+			continue
 		}
+		if (/\s/.test(wrong)) issues.push({ row: i, code: 'wrongSpace' })
+		else if (wrong.length > USER_DICT_MAX_WORD_LEN) issues.push({ row: i, code: 'tooLong' })
+		else if (/\s{2,}/.test(right)) issues.push({ row: i, code: 'rightSpace' })
+		else if (seen.has(wrong)) issues.push({ row: i, code: 'dup' })
+		if (!/\s/.test(wrong) && wrong.length <= USER_DICT_MAX_WORD_LEN && !seen.has(wrong)) seen.set(wrong, i)
+		entries += 1
 	}
-	const entries = Object.keys(phrases).length
-	if (entries > USER_DICT_MAX_ENTRIES) {
-		out.push(`词条数 ${entries} 超过上限 ${USER_DICT_MAX_ENTRIES}`)
-	}
-	return { entries, errors: out, ok: out.length === 0 }
+	const overflow = entries > USER_DICT_MAX_ENTRIES
+	return { entries, issues, overflow, ok: issues.length === 0 && !overflow }
 }

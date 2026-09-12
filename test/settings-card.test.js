@@ -23,8 +23,10 @@ function loadBundleExports() {
 	const reactStub = {
 		createElement: () => null,
 		useEffect: () => {},
+		useLayoutEffect: () => {},
 		useState: (v) => [typeof v === 'function' ? v() : v, () => {}],
 		useId: () => 'r1',
+		useRef: (v) => ({ current: v }),
 	}
 	const runtimeStub = {
 		createSnapshotStore: (init) => ({
@@ -113,31 +115,65 @@ test('parseStagedPatch 拒绝非法数字与空必填文本', () => {
 	assert.deepEqual(edge.invalid, [])
 })
 
-// —— 用户词库区块：checkUserDictText 校验（行式语法 + 上限）——
-test('checkUserDictText：合法文本给条数，错误行带行号前缀', () => {
-	const ok = api.checkUserDictText('# 注释\n\n新错词 => 新正词\n帐号 => 账户')
-	assert.equal(ok.entries, 2)
-	assert.deepEqual(ok.errors, [])
-	assert.equal(ok.ok, true)
-
-	const bad = api.checkUserDictText('合法 => 词\n没有分隔符\n=> 空错词')
-	assert.equal(bad.entries, 1)
-	assert.equal(bad.ok, false)
-	assert.deepEqual(bad.errors, ['第 2 行：缺少「=>」分隔符', '第 3 行：错词为空或含空白'])
-
-	const empty = api.checkUserDictText('')
-	assert.equal(empty.entries, 0)
-	assert.equal(empty.ok, true)
+// —— 用户词库区块：成对词条列表的解析 / 序列化 / 逐行校验 ——
+test('parseUserDictPairs：注释空行跳过，顺序保留，非法行静默丢弃', () => {
+	const pairs = api.parseUserDictPairs('# 注释\n\n新错词 => 新正词\nalot => a lot\n没有分隔符\n=> 空错词\n')
+	assert.deepEqual(pairs, [
+		{ wrong: '新错词', right: '新正词' },
+		{ wrong: 'alot', right: 'a lot' },
+	])
+	assert.deepEqual(api.parseUserDictPairs(''), [])
 })
 
-test('checkUserDictText：错词长度与词条数上限', () => {
+test('serializeUserDictPairs：trim、跳过两侧全空行，与解析互逆', () => {
+	assert.equal(
+		api.serializeUserDictPairs([
+			{ wrong: ' 帐号 ', right: '账户' },
+			{ wrong: '', right: '' },
+			{ wrong: 'alot', right: ' a lot ' },
+		]),
+		'帐号 => 账户\nalot => a lot',
+	)
+	// 往返稳定
+	const text = 'a => b\nc => d'
+	assert.equal(api.serializeUserDictPairs(api.parseUserDictPairs(text)), text)
+})
+
+test('checkUserDictPairs：逐行错误码（blank/wrongSpace/rightSpace/tooLong/dup）', () => {
+	const ok = api.checkUserDictPairs([
+		{ wrong: '新错词', right: '新正词' },
+		{ wrong: '', right: '' },
+	])
+	assert.equal(ok.entries, 1)
+	assert.deepEqual(ok.issues, [])
+	assert.equal(ok.ok, true)
+
+	const bad = api.checkUserDictPairs([
+		{ wrong: '只填一边', right: '' }, // blank
+		{ wrong: '两 个 词', right: '正词' }, // wrongSpace
+		{ wrong: 'a', right: '两  个 空格' }, // rightSpace
+		{ wrong: '一二三四五六七八九十一二三四五六七', right: '目标' }, // tooLong
+		{ wrong: '重复词', right: '甲' },
+		{ wrong: '重复词', right: '乙' }, // dup（第二处报）
+	])
+	assert.equal(bad.ok, false)
+	assert.deepEqual(bad.issues, [
+		{ row: 0, code: 'blank' },
+		{ row: 1, code: 'wrongSpace' },
+		{ row: 2, code: 'rightSpace' },
+		{ row: 3, code: 'tooLong' },
+		{ row: 5, code: 'dup' },
+	])
+})
+
+test('checkUserDictPairs：词条数上限（超限置 overflow，错误挂区块级）', () => {
 	assert.equal(api.USER_DICT_MAX_ENTRIES, 2000)
 	assert.equal(api.USER_DICT_MAX_WORD_LEN, 16)
-	const tooLong = api.checkUserDictText('一二三四五六七八九十一二三四五六七 => 目标')
-	assert.equal(tooLong.ok, false)
-	assert.ok(tooLong.errors.some((m) => m.includes('超过 16')))
-	const many = Array.from({ length: api.USER_DICT_MAX_ENTRIES + 1 }, (_, i) => `错词${i} => 正词${i}`).join('\n')
-	assert.equal(api.checkUserDictText(many).ok, false)
+	const many = Array.from({ length: api.USER_DICT_MAX_ENTRIES + 1 }, (_, i) => ({ wrong: `错词${i}`, right: `正词${i}` }))
+	const res = api.checkUserDictPairs(many)
+	assert.equal(res.overflow, true)
+	assert.equal(res.ok, false)
+	assert.deepEqual(res.issues, [])
 })
 
 // —— apply() 注册断言 ——

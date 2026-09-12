@@ -40,11 +40,16 @@ import {
 	fieldText,
 	fieldChecked,
 	parseStagedPatch,
-	checkUserDictText,
+	checkUserDictPairs,
+	parseUserDictPairs,
+	serializeUserDictPairs,
 	USER_DICT_MAX_ENTRIES,
 	USER_DICT_MAX_WORD_LEN,
 	type StagedEdits,
+	type UserDictPair,
+	type UserDictPairIssueCode,
 } from './settings-form.js'
+import { moveItem, snapshotRows, applyFlip, startRowDrag } from './flip-list.js'
 
 // 测试出口：bundle 内的词典扫描与设置表单行为守卫（test/*.test.js 经
 // ModuleLoader 壳取回），宿主运行时只消费 apply/inject，不受影响。
@@ -53,7 +58,7 @@ export { scanWithDict, mergeDicts, BUILTIN_DICT, parseDictText }
 export { loadUserDictText, saveUserDictText }
 export { scanWithUserDict }
 export { SETTINGS_FIELDS, stageValue, unstageValue, isFieldStaged, fieldText, fieldChecked, parseStagedPatch }
-export { checkUserDictText, USER_DICT_MAX_ENTRIES, USER_DICT_MAX_WORD_LEN }
+export { checkUserDictPairs, parseUserDictPairs, serializeUserDictPairs, USER_DICT_MAX_ENTRIES, USER_DICT_MAX_WORD_LEN }
 
 export const inject = ['slots', 'locale', 'connection', 'remote']
 
@@ -291,14 +296,28 @@ const CSS = [
 	'.ia_sOpt.ia_sel{color:#679efe}',
 	'.ia_sOptCheck{flex:none;display:flex}',
 	'.ia_smodelsNote{margin:0;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:1.5}',
-	// —— 自定义词库区块（仅本浏览器） ——
+	// —— 自定义词库区块（仅本浏览器）：成对词条列表 + 拖拽排序 ——
 	'.ia_suserdict{gap:8px}',
-	'.ia_stextarea{width:100%;box-sizing:border-box;resize:vertical;min-height:96px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-module-platform);color:var(--dsw-alias-label-primary);font:inherit;font-size:13px;line-height:1.6;padding:6px 10px;font-family:var(--dsw-alias-font-mono,ui-monospace,SFMono-Regular,Menlo,Consolas,monospace)}',
-	'.ia_stextarea:focus{outline:none;border-color:#679efe}',
-	'.ia_stextarea.ia_bad,.ia_stextarea.ia_bad:focus{border-color:var(--dsw-alias-accent-danger,#e5484d)}',
-	'.ia_suserdictMeta{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:1.5}',
-	'.ia_suserdictErrors{margin:0;padding:0;list-style:none;color:var(--dsw-alias-accent-danger,#e5484d);font-size:11px;line-height:1.6}',
-	'.ia_suserdictBtns{display:flex;justify-content:flex-end;gap:8px}',
+	'.ia_sgroupRow{display:flex;align-items:baseline;justify-content:space-between;gap:8px}',
+	'.ia_udMeta{color:var(--dsw-alias-label-tertiary);font-size:11px;font-weight:400;line-height:1.5;white-space:nowrap}',
+	'.ia_udList{display:flex;flex-direction:column;gap:8px}',
+	'.ia_udRow{display:flex;align-items:center;flex-wrap:wrap;gap:8px;transition:transform .18s cubic-bezier(.2,.8,.2,1),opacity .14s}',
+	'.ia_udRow.ia_udDrag{transition:none;position:relative;z-index:20;background:var(--dsw-alias-bg-layer-3);border-radius:8px;box-shadow:0 6px 20px rgba(0,0,0,.3);pointer-events:none}',
+	'.ia_udRow.ia_udOut{opacity:0;transform:translateX(14px);pointer-events:none}',
+	'body.ia_udDragging{cursor:grabbing;user-select:none}',
+	'.ia_udGrip{flex:none;width:20px;height:26px;display:flex;align-items:center;justify-content:center;border:none;background:transparent;color:var(--dsw-alias-label-tertiary);font:inherit;font-size:14px;line-height:1;cursor:grab;touch-action:none;border-radius:4px}',
+	'.ia_udGrip:hover{color:var(--dsw-alias-label-primary)}',
+	'.ia_udGrip:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:-1px}',
+	'.ia_udIn{flex:1 1 0;min-width:0;box-sizing:border-box;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-module-platform);color:var(--dsw-alias-label-primary);font:inherit;font-size:13px;line-height:1.5;padding:5px 10px}',
+	'.ia_udIn:focus{outline:none;border-color:#679efe}',
+	'.ia_udIn.ia_bad,.ia_udIn.ia_bad:focus{border-color:var(--dsw-alias-accent-danger,#e5484d)}',
+	'.ia_udArrow{flex:none;color:var(--dsw-alias-label-tertiary)}',
+	'.ia_udDel{flex:none;cursor:pointer;border:none;background:transparent;color:var(--dsw-alias-label-tertiary);font:inherit;font-size:15px;line-height:1;padding:4px 6px;border-radius:4px}',
+	'.ia_udDel:hover{color:var(--dsw-alias-accent-danger,#e5484d);background:var(--dsw-interactive-bg-hover)}',
+	'.ia_udErr{flex-basis:100%;margin:-3px 0 0 28px;color:var(--dsw-alias-accent-danger,#e5484d);font-size:11px;line-height:1.5}',
+	'.ia_udAdd{width:100%;box-sizing:border-box;cursor:pointer;border:1px dashed var(--dsw-alias-border-l2);border-radius:8px;background:transparent;color:var(--dsw-alias-label-tertiary);font:inherit;font-size:12px;line-height:1.5;padding:5px 10px;transition:color .15s,border-color .15s}',
+	'.ia_udAdd:hover{color:var(--dsw-alias-label-primary);border-color:var(--dsw-alias-label-dimmed)}',
+	'.ia_udEmpty{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:1.6;padding:2px 0}',
 	'.ia_scardFoot{border-top:1px solid var(--dsw-alias-border-l2);display:flex;align-items:center;justify-content:flex-end;gap:8px;padding:12px 0 4px}',
 	'.ia_sfailed{min-width:0;flex:1;margin:0;color:var(--dsw-alias-label-error);font-size:12px;line-height:1.5}',
 	'.ia_sDiscard,.ia_sSave{appearance:none;cursor:pointer;font:inherit;border:1px solid transparent;border-radius:8px;padding:5px 14px;font-size:13px;line-height:1.5}',
@@ -831,10 +850,20 @@ function ToggleControl({ useConfig, t, api }: SlotProps): react.ReactElement | n
 	)
 }
 
+// —— 自定义词库列表行：id 仅供 React key 与 FLIP 行定位（模块级自增，
+// 组件重挂载也不撞号）；纯逻辑（解析/校验/序列化）在 settings-form.ts ——
+interface UserDictRow extends UserDictPair {
+	id: number
+}
+let udRowSeq = 0
+const nextRowId = (): number => (udRowSeq += 1)
+const withRowIds = (pairs: readonly UserDictPair[]): UserDictRow[] => pairs.map((p) => ({ ...p, id: nextRowId() }))
+
 // —— 设置页卡片（v5.1）——
 // 暂存编辑（staged）+ 统一保存/放弃，与官方兄弟卡片（Bash/AgentLoop/
 // WebSearch）交互同构：折叠卡片头（名称+描述+未保存标记），展开后分组
-// 字段行，底部放弃/保存；数字与必填文本本地校验，无效字段标红禁存。
+// 字段行，底部一对放弃/保存（配置与自定义词库共用，各自独立报告失败）；
+// 数字与必填文本本地校验，无效字段标红禁存。
 interface SettingsCardProps {
 	useConfig?: UseStore<InputAssistConfig>
 	t: Translate
@@ -859,27 +888,86 @@ function SettingsCard(props: SettingsCardProps): react.ReactElement | null {
 	const [modelsState, setModelsState] = react.useState<'idle' | 'fetching' | 'failed'>('idle')
 	const [menuFor, setMenuFor] = react.useState<keyof InputAssistConfig | null>(null)
 	const parsed = parseStagedPatch(staged)
-	const dirty = Object.keys(staged).length > 0
-	const blocked = !dirty || parsed.invalid.length > 0 || saving
 
-	// —— 自定义词库（仅本浏览器）：独立暂存流，目标 localStorage 而非 settings.yaml ——
-	// userDraft 为 null 表示未编辑（textarea 显示已存值）；保存成功即重扫当前草稿
-	const [userSavedText, setUserSavedText] = react.useState((): string => loadUserDictText(dictStorage()))
-	const [userDraft, setUserDraft] = react.useState<string | null>(null)
+	// —— 自定义词库（仅本浏览器）：成对词条列表，独立暂存流，目标 localStorage ——
+	// userRows 为 null 表示未编辑（展示已存词条）；保存成功即重扫当前草稿
+	const [userSavedPairs, setUserSavedPairs] = react.useState<UserDictRow[]>((): UserDictRow[] =>
+		withRowIds(parseUserDictPairs(loadUserDictText(dictStorage()))),
+	)
+	const [userRows, setUserRows] = react.useState<UserDictRow[] | null>(null)
 	const [userStoreFailed, setUserStoreFailed] = react.useState(false)
-	const userText = userDraft ?? userSavedText
-	const userCheck = checkUserDictText(userText)
-	const userDirty = userDraft !== null && userDraft !== userSavedText
+	const [pendingFocus, setPendingFocus] = react.useState<number | null>(null)
+	const udListRef = react.useRef<HTMLDivElement | null>(null)
+	const rows = userRows ?? userSavedPairs
+	const userCheck = checkUserDictPairs(rows)
+	// 空行（两侧全空）序列化时被跳过，但编辑器里存在即视为未保存：
+	// 否则「放弃修改」会被禁用、空行只能手动删，保存后还会滞留
+	const hasEmptyRow = rows.some((r) => r.wrong.trim() === '' && r.right.trim() === '')
+	const userDirty =
+		userRows !== null && (hasEmptyRow || serializeUserDictPairs(userRows) !== serializeUserDictPairs(userSavedPairs))
+	const dirty = Object.keys(staged).length > 0 || userDirty
+	const blocked = !dirty || parsed.invalid.length > 0 || !userCheck.ok || saving
 	const onSaveUserDict = (): void => {
 		if (!userDirty || !userCheck.ok) return
-		if (saveUserDictText(dictStorage(), userDraft ?? '')) {
-			setUserSavedText(userDraft ?? '')
-			setUserDraft(null)
+		// 空行不落库，保存后从编辑器一并清除
+		const next = (userRows ?? []).filter((r) => r.wrong.trim() !== '' || r.right.trim() !== '')
+		if (saveUserDictText(dictStorage(), serializeUserDictPairs(next))) {
+			setUserSavedPairs(next)
+			setUserRows(null)
 			setUserStoreFailed(false)
 			rescanDict()
 		} else {
 			setUserStoreFailed(true)
 		}
+	}
+	const editUserRow = (id: number, patch: Partial<UserDictPair>): void => {
+		setUserStoreFailed(false)
+		setUserRows((prev) => (prev ?? userSavedPairs).map((r) => (r.id === id ? { ...r, ...patch } : r)))
+	}
+	const addUserRow = (): void => {
+		setUserStoreFailed(false)
+		const id = nextRowId()
+		setUserRows((prev) => [...(prev ?? userSavedPairs), { id, wrong: '', right: '' }])
+		setPendingFocus(id)
+	}
+	react.useEffect(() => {
+		if (pendingFocus === null) return
+		setPendingFocus(null)
+		const input = udListRef.current?.querySelector<HTMLInputElement>(`[data-flip-id="${pendingFocus}"] input`)
+		input?.focus()
+	}, [pendingFocus])
+	// FLIP 落位：提交前快照视觉位，在 useLayoutEffect（DOM 已更新、绘制前）
+	// 应用反向位移再放过渡 —— 时机由 React 保证，不依赖 flushSync/react-dom
+	const flipBefore = react.useRef<Map<string, number> | null>(null)
+	const commitUserRows = (next: UserDictRow[]): void => {
+		const container = udListRef.current
+		flipBefore.current = container !== null ? snapshotRows(container) : null
+		setUserRows(next)
+	}
+	react.useLayoutEffect(() => {
+		const before = flipBefore.current
+		if (before === null) return
+		flipBefore.current = null
+		const container = udListRef.current
+		if (container !== null) applyFlip(container, before)
+	}, [rows])
+	const removeUserRow = (id: number): void => {
+		setUserStoreFailed(false)
+		const container = udListRef.current
+		const rowEl = container !== null ? container.querySelector<HTMLElement>(`[data-flip-id="${id}"]`) : null
+		if (container === null || rowEl === null) {
+			setUserRows((prev) => (prev ?? userSavedPairs).filter((r) => r.id !== id))
+			return
+		}
+		if (rowEl.classList.contains('ia_udOut')) return
+		rowEl.classList.add('ia_udOut') // 先淡出，再 FLIP 收拢下方各行
+		window.setTimeout(() => {
+			commitUserRows((userRows ?? userSavedPairs).filter((r) => r.id !== id))
+		}, 130)
+	}
+	// 拖拽/键盘搬运统一走 FLIP 落位（from===to 时也让拖拽行滑回原位）
+	const moveUserRow = (from: number, to: number): void => {
+		commitUserRows(moveItem(userRows ?? userSavedPairs, from, to))
 	}
 
 	const fetchModelList = async (): Promise<void> => {
@@ -925,14 +1013,18 @@ function SettingsCard(props: SettingsCardProps): react.ReactElement | null {
 		setFailed(false)
 		setStaged((prev) => stageValue(prev, key, value))
 	}
+	// 统一保存：配置补丁走宿主 RPC，词库写 localStorage（两路独立报告失败）
 	const onSave = async (): Promise<void> => {
 		if (blocked) return
 		setSaving(true)
 		setFailed(false)
-		const ok = await api.save(parsed.patch)
+		if (Object.keys(staged).length > 0) {
+			const ok = await api.save(parsed.patch)
+			if (ok) setStaged({})
+			else setFailed(true)
+		}
 		setSaving(false)
-		if (ok) setStaged({})
-		else setFailed(true)
+		onSaveUserDict()
 	}
 
 	const group = (id: 'completion' | 'proofread'): react.ReactElement =>
@@ -1102,9 +1194,99 @@ function SettingsCard(props: SettingsCardProps): react.ReactElement | null {
 						bad ? el('span', { key: 'bad', className: 'ia_sbad' }, invalidText) : null,
 						resetBtn,
 					)
-				}),
+					}),
+				),
+			)
+
+	const issueByRow = new Map(userCheck.issues.map((x) => [x.row, x.code]))
+	const udErrText = (code: UserDictPairIssueCode): string => {
+		if (code === 'blank') return t('settings.udErr.blank')
+		if (code === 'wrongSpace') return t('settings.udErr.wrongSpace')
+		if (code === 'rightSpace') return t('settings.udErr.rightSpace')
+		if (code === 'dup') return t('settings.udErr.dup')
+		return `${t('settings.udErr.tooLong')}（≤ ${USER_DICT_MAX_WORD_LEN}）`
+	}
+	const renderUserRow = (r: UserDictRow, i: number): react.ReactElement => {
+		const code = issueByRow.get(i)
+		const wrongBad = code !== undefined && code !== 'rightSpace'
+		const rightBad = code === 'rightSpace' || code === 'blank'
+		return el(
+			'div',
+			{ key: r.id, className: 'ia_udRow', 'data-flip-id': String(r.id), role: 'listitem' },
+			el(
+				'button',
+				{
+					type: 'button',
+					className: 'ia_udGrip',
+					title: t('settings.udDragHint'),
+					'aria-label': `${t('settings.udDragHint')} ${i + 1}`,
+					onPointerDown: (e: {
+						button?: number
+						pointerId?: number
+						clientY: number
+						currentTarget: EventTarget & HTMLElement
+						preventDefault(): void
+					}) => {
+						const row = e.currentTarget.closest('[data-flip-id]')
+						const container = udListRef.current
+						if (row instanceof HTMLElement && container !== null) {
+							startRowDrag({ event: e, row, container, onDrop: moveUserRow })
+						}
+					},
+					onKeyDown: (e: { key: string; preventDefault(): void; currentTarget: EventTarget & HTMLElement }) => {
+						if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return
+						e.preventDefault()
+						const row = e.currentTarget.closest('[data-flip-id]')
+						const container = udListRef.current
+						if (!(row instanceof HTMLElement) || container === null) return
+						const list = Array.from(container.querySelectorAll<HTMLElement>('[data-flip-id]'))
+						const from = list.indexOf(row)
+						const to = from + (e.key === 'ArrowDown' ? 1 : -1)
+						if (to < 0 || to >= list.length) return
+						moveUserRow(from, to)
+					},
+				},
+				'⠿',
 			),
+			el('input', {
+				type: 'text',
+				className: `ia_udIn${wrongBad ? ' ia_bad' : ''}`,
+				value: r.wrong,
+				placeholder: t('settings.udWrongPh'),
+				'aria-label': `${t('settings.udWrongPh')} ${i + 1}`,
+				autoComplete: 'off',
+				spellCheck: false,
+				onChange: (event: { target: { value: string } }) => {
+					editUserRow(r.id, { wrong: event.target.value })
+				},
+			}),
+			el('span', { key: 'arrow', className: 'ia_udArrow', 'aria-hidden': 'true' }, '→'),
+			el('input', {
+				type: 'text',
+				className: `ia_udIn${rightBad ? ' ia_bad' : ''}`,
+				value: r.right,
+				placeholder: t('settings.udRightPh'),
+				'aria-label': `${t('settings.udRightPh')} ${i + 1}`,
+				autoComplete: 'off',
+				spellCheck: false,
+				onChange: (event: { target: { value: string } }) => {
+					editUserRow(r.id, { right: event.target.value })
+				},
+			}),
+			el(
+				'button',
+				{
+					type: 'button',
+					className: 'ia_udDel',
+					title: t('settings.udDelHint'),
+					'aria-label': `${t('settings.udDelHint')} ${i + 1}`,
+					onClick: () => removeUserRow(r.id),
+				},
+				'×',
+			),
+			code !== undefined ? el('div', { key: 'err', className: 'ia_udErr', role: 'alert' }, udErrText(code)) : null,
 		)
+	}
 
 	return el(
 		'li',
@@ -1149,66 +1331,50 @@ function SettingsCard(props: SettingsCardProps): react.ReactElement | null {
 						{ className: 'ia_scardBody' },
 						group('completion'),
 						group('proofread'),
-						el('div', { key: 'ud-group', className: 'ia_sgroup' }, t('settings.userDictGroup')),
 						el(
 							'div',
-							{ key: 'ud-rows', className: 'ia_srows ia_suserdict' },
-							el('div', { className: 'ia_srowHint' }, t('settings.userDictHint')),
-							el('textarea', {
-								className: `ia_stextarea${userDirty && !userCheck.ok ? ' ia_bad' : ''}`,
-								rows: 6,
-								spellCheck: false,
-								'aria-label': t('settings.userDictLabel'),
-								'aria-invalid': userDirty && !userCheck.ok ? 'true' : undefined,
-								value: userText,
-								onChange: (event: { target: { value: string } }) => {
-									setUserStoreFailed(false)
-									setUserDraft(event.target.value)
-								},
-							}),
+							{ key: 'ud', className: 'ia_srows ia_suserdict' },
 							el(
 								'div',
-								{ className: 'ia_suserdictMeta', 'data-ia-userdict-entries': userCheck.entries },
-								`${userCheck.entries} ${t('settings.userDictUnit')}`,
-								userDirty ? ` · ${t('settings.unsaved')}` : '',
+								{ className: 'ia_sgroup ia_sgroupRow' },
+								el('span', null, t('settings.userDictGroup')),
+								el(
+									'span',
+									{ className: 'ia_udMeta', 'data-ia-userdict-entries': userCheck.entries },
+									`${userCheck.entries} ${t('settings.userDictUnit')}${userDirty ? ` · ${t('settings.unsaved')}` : ''}`,
+								),
 							),
-							userDirty && userCheck.errors.length > 0
+							el('div', { key: 'ud-hint', className: 'ia_srowHint' }, t('settings.userDictHint')),
+							el(
+								'div',
+								{
+									key: 'ud-list',
+									className: 'ia_udList',
+									role: 'list',
+									'aria-label': t('settings.userDictLabel'),
+									ref: (node: HTMLDivElement | null): void => {
+										udListRef.current = node
+									},
+								},
+								rows.length === 0
+									? el('div', { key: 'ud-empty', className: 'ia_udEmpty' }, t('settings.udEmpty'))
+									: rows.map((r, i) => renderUserRow(r, i)),
+							),
+							el(
+								'button',
+								{ key: 'ud-add', type: 'button', className: 'ia_udAdd', onClick: addUserRow },
+								`＋ ${t('settings.udAdd')}`,
+							),
+							userCheck.overflow
 								? el(
-										'ul',
-										{ key: 'ud-errors', className: 'ia_suserdictErrors', role: 'alert' },
-										userCheck.errors.map((msg, i) => el('li', { key: i }, msg)),
+										'p',
+										{ key: 'ud-overflow', className: 'ia_sfailed', role: 'alert' },
+										`${t('settings.udOverflow')}（≤ ${USER_DICT_MAX_ENTRIES}）`,
 									)
 								: null,
 							userStoreFailed
 								? el('p', { key: 'ud-storefail', className: 'ia_sfailed', role: 'status' }, t('settings.userDictStoreFailed'))
 								: null,
-							el(
-								'div',
-								{ key: 'ud-btns', className: 'ia_suserdictBtns' },
-								el(
-									'button',
-									{
-										type: 'button',
-										className: 'ia_sDiscard',
-										disabled: !userDirty,
-										onClick: () => {
-											setUserDraft(null)
-											setUserStoreFailed(false)
-										},
-									},
-									t('settings.discard'),
-								),
-								el(
-									'button',
-									{
-										type: 'button',
-										className: 'ia_sSave',
-										disabled: !userDirty || !userCheck.ok,
-										onClick: onSaveUserDict,
-									},
-									t('settings.save'),
-								),
-							),
 						),
 						modelsState === 'failed'
 							? el('p', { key: 'modelsNote', className: 'ia_smodelsNote', role: 'status' }, t('settings.modelsFailed'))
@@ -1219,7 +1385,17 @@ function SettingsCard(props: SettingsCardProps): react.ReactElement | null {
 						failed ? el('p', { key: 'failed', className: 'ia_sfailed', role: 'status' }, t('settings.saveFailed')) : null,
 						el(
 							'button',
-							{ type: 'button', className: 'ia_sDiscard', disabled: !dirty || saving, onClick: () => setStaged({}) },
+							{
+								type: 'button',
+								className: 'ia_sDiscard',
+								disabled: !dirty || saving,
+								onClick: () => {
+									setFailed(false)
+									setStaged({})
+									setUserRows(null)
+									setUserStoreFailed(false)
+								},
+							},
 							t('settings.discard'),
 						),
 						el(
@@ -1320,10 +1496,22 @@ export function apply(ctx: PluginContext): void {
 					// —— 自定义词库（仅本浏览器） ——
 					'settings.userDictGroup': '自定义词库（仅本浏览器）',
 					'settings.userDictHint':
-						'每行一条「错词 => 正词」，# 开头为注释；同名错词覆盖内置词，「错词 => 错词」表示不再检查该词。只保存在本浏览器，不随 settings.yaml 同步，换浏览器需自行复制。',
-					'settings.userDictLabel': '自定义词库内容',
+						'左列错词、右列正词，中英文皆可；同名错词覆盖内置词，正词与错词相同则不再检查该词。只保存在本浏览器，不随 settings.yaml 同步，换浏览器需自行复制。',
+					'settings.userDictLabel': '自定义词库列表',
 					'settings.userDictUnit': '条',
 					'settings.userDictStoreFailed': '无法写入本浏览器存储（可能处于隐私模式或存储已满），词库未保存',
+					'settings.udAdd': '添加词条',
+					'settings.udEmpty': '还没有自定义词条',
+					'settings.udWrongPh': '错词',
+					'settings.udRightPh': '正词',
+					'settings.udDelHint': '删除这一条',
+					'settings.udDragHint': '拖动调整顺序（或聚焦后 ↑ ↓）',
+					'settings.udErr.blank': '错词与正词需成对填写',
+					'settings.udErr.wrongSpace': '错词不能含空白',
+					'settings.udErr.rightSpace': '正词不能含连续空白',
+					'settings.udErr.tooLong': '错词过长',
+					'settings.udErr.dup': '错词与其他行重复',
+					'settings.udOverflow': '词条数超过上限',
 				},
 				en: {
 					'toggle.completion':
@@ -1384,10 +1572,22 @@ export function apply(ctx: PluginContext): void {
 					// —— Custom dictionary (this browser only) ——
 					'settings.userDictGroup': 'Custom dictionary (this browser only)',
 					'settings.userDictHint':
-						'One entry per line: “wrong => right”; lines starting with # are comments. Same-key entries override the builtin ones; “wrong => wrong” disables checking that word. Stored in this browser only (not synced via settings.yaml).',
-					'settings.userDictLabel': 'Custom dictionary content',
+						'Left: wrong word; right: correction — Chinese or English. Same-key entries override the builtin ones; mapping a word to itself stops checking it. Stored in this browser only (not synced via settings.yaml).',
+					'settings.userDictLabel': 'Custom dictionary list',
 					'settings.userDictUnit': 'entries',
 					'settings.userDictStoreFailed': 'Cannot write to browser storage (private mode or quota exceeded); dictionary not saved',
+					'settings.udAdd': 'Add entry',
+					'settings.udEmpty': 'No custom entries yet',
+					'settings.udWrongPh': 'wrong',
+					'settings.udRightPh': 'correct',
+					'settings.udDelHint': 'Remove this entry',
+					'settings.udDragHint': 'Drag to reorder (or focus and use ↑ ↓)',
+					'settings.udErr.blank': 'Fill in both the wrong word and the correction',
+					'settings.udErr.wrongSpace': 'The wrong word must not contain whitespace',
+					'settings.udErr.rightSpace': 'The correction must not contain double spaces',
+					'settings.udErr.tooLong': 'Wrong word too long',
+					'settings.udErr.dup': 'Duplicate wrong word in another row',
+					'settings.udOverflow': 'Too many entries',
 				},
 			}),
 		'input-assist: dictionaries',

@@ -106,8 +106,9 @@ export function parseDictText(text: string): { phrases: Record<string, string>; 
 			errors.push({ line: i + 1, message: '错词为空或含空白' })
 			continue
 		}
-		if (right === '' || /\s/.test(right)) {
-			errors.push({ line: i + 1, message: '正词为空或含空白' })
+		// 正词允许单个空格（英文修正 alot => a lot），仅拒绝空值/连续空白
+		if (right === '' || /\s{2,}/.test(right)) {
+			errors.push({ line: i + 1, message: '正词为空或含连续空白' })
 			continue
 		}
 		phrases[wrong] = right
