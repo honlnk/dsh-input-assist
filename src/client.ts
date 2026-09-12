@@ -45,6 +45,9 @@ import {
 	checkUserDictPairs,
 	parseUserDictPairs,
 	serializeUserDictPairs,
+	importUserDictText,
+	mergeUserDictPairs,
+	exportUserDictText,
 	USER_DICT_MAX_ENTRIES,
 	USER_DICT_MAX_WORD_LEN,
 	type StagedEdits,
@@ -60,7 +63,7 @@ export { scanWithDict, mergeDicts, BUILTIN_DICT, parseDictText }
 export { loadUserDictText, saveUserDictText }
 export { scanWithUserDict }
 export { SETTINGS_FIELDS, stageValue, unstageValue, isFieldStaged, fieldText, fieldChecked, parseStagedPatch }
-export { checkUserDictPairs, parseUserDictPairs, serializeUserDictPairs, USER_DICT_MAX_ENTRIES, USER_DICT_MAX_WORD_LEN }
+export { checkUserDictPairs, parseUserDictPairs, serializeUserDictPairs, importUserDictText, mergeUserDictPairs, exportUserDictText, USER_DICT_MAX_ENTRIES, USER_DICT_MAX_WORD_LEN }
 
 export const inject = ['slots', 'locale', 'connection', 'remote']
 
@@ -302,6 +305,13 @@ const CSS = [
 	'.ia_suserdict{gap:8px}',
 	'.ia_sgroupRow{display:flex;align-items:baseline;justify-content:space-between;gap:8px}',
 	'.ia_udMeta{color:var(--dsw-alias-label-tertiary);font-size:11px;font-weight:400;line-height:1.5;white-space:nowrap}',
+	'.ia_udHead{display:flex;align-items:center;flex-wrap:wrap;gap:8px;white-space:nowrap}',
+	'.ia_udTools{display:flex;gap:6px}',
+	'.ia_udTool{cursor:pointer;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-module-platform);color:var(--dsw-alias-label-tertiary);font:inherit;font-size:11px;line-height:1.5;padding:2px 8px;box-sizing:border-box;transition:color .15s,border-color .15s}',
+	'.ia_udTool:hover{color:var(--dsw-alias-label-primary);border-color:var(--dsw-alias-label-dimmed)}',
+	'.ia_udTool:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:-1px}',
+	'.ia_udFile{display:none}',
+	'.ia_udNote{color:var(--dsw-alias-label-secondary);font-size:11px;line-height:1.6}',
 	'.ia_udList{display:flex;flex-direction:column;gap:8px}',
 	'.ia_udRow{display:flex;align-items:center;flex-wrap:wrap;gap:8px;transition:transform .18s cubic-bezier(.2,.8,.2,1),opacity .14s}',
 	'.ia_udRow.ia_udDrag{transition:none;position:relative;z-index:20;background:var(--dsw-alias-bg-layer-3);border-radius:8px;box-shadow:0 6px 20px rgba(0,0,0,.3);pointer-events:none}',
@@ -1038,6 +1048,83 @@ function SettingsCard(props: SettingsCardProps): react.ReactElement | null {
 		commitUserRows(moveItem(userRows ?? userSavedPairs, from, to))
 	}
 
+	// —— 导入/导出/复制（纯浏览器侧）：导出所见列表；导入只进暂存列表，
+	// 仍要点保存才落 localStorage —— 与编辑流的校验/失败提示共用 ——
+
+	// 瞬时结果提示（导入/复制成败反馈），数秒后自动消失
+	const [udFlash, setUdFlash] = react.useState<string | null>(null)
+	const udFlashTimer = react.useRef<number | null>(null)
+	const flashUd = (text: string): void => {
+		setUdFlash(text)
+		if (udFlashTimer.current !== null) window.clearTimeout(udFlashTimer.current)
+		udFlashTimer.current = window.setTimeout(() => {
+			setUdFlash(null)
+			udFlashTimer.current = null
+		}, 3000)
+	}
+	react.useEffect(
+		() => () => {
+			if (udFlashTimer.current !== null) window.clearTimeout(udFlashTimer.current)
+		},
+		[],
+	)
+	const udFileRef = react.useRef<HTMLInputElement | null>(null)
+	const exportUserDict = (): void => {
+		const blob = new Blob([exportUserDictText(rows)], { type: 'text/plain;charset=utf-8' })
+		const url = URL.createObjectURL(blob)
+		const a = document.createElement('a')
+		a.href = url
+		a.download = 'dsh-input-assist-dict.txt'
+		a.rel = 'noopener'
+		document.body.appendChild(a)
+		a.click()
+		a.remove()
+		window.setTimeout(() => URL.revokeObjectURL(url), 0)
+	}
+	const copyUserDict = async (): Promise<void> => {
+		const entries = rows.filter((r) => r.wrong.trim() !== '' && r.right.trim() !== '').length
+		try {
+			await navigator.clipboard.writeText(exportUserDictText(rows))
+			flashUd(`${t('settings.udCopied')} ${entries} ${t('settings.userDictUnit')}`)
+		} catch {
+			flashUd(t('settings.udCopyFailed'))
+		}
+	}
+	const onImportPicked = (event: { target: EventTarget & { files: FileList | null; value: string } }): void => {
+		const file = event.target.files !== null ? event.target.files[0] ?? null : null
+		event.target.value = '' // 允许重复选择同一文件
+		if (file === null) return
+		void (async () => {
+			if (file.size > 1024 * 1024) {
+				flashUd(t('settings.udFileTooBig'))
+				return
+			}
+			let text = ''
+			try {
+				text = await file.text()
+			} catch {
+				flashUd(t('settings.udImportFailed'))
+				return
+			}
+			const imp = importUserDictText(text)
+			const ignored = imp.ignored > 0 ? ` · ${t('settings.udIgnored')} ${imp.ignored} ${t('settings.udLines')}` : ''
+			if (imp.pairs.length === 0) {
+				flashUd(`${t('settings.udImportEmpty')}${ignored}`)
+				return
+			}
+			const merged = mergeUserDictPairs(rows, imp.pairs)
+			commitUserRows(
+				merged.rows.map((r) => ({
+					id: r.fromCurrent >= 0 ? rows[r.fromCurrent].id : nextRowId(),
+					wrong: r.wrong,
+					right: r.right,
+				})),
+			)
+			setUserStoreFailed(false)
+			flashUd(`${t('settings.udImportDone')}${t('settings.udAdded')} ${merged.added} · ${t('settings.udUpdated')} ${merged.updated}${ignored}`)
+		})()
+	}
+
 	const fetchModelList = async (): Promise<void> => {
 		if (api.fetchModels === undefined) return
 		setModelsState('fetching')
@@ -1408,11 +1495,61 @@ function SettingsCard(props: SettingsCardProps): react.ReactElement | null {
 								el('span', null, t('settings.userDictGroup')),
 								el(
 									'span',
-									{ className: 'ia_udMeta', 'data-ia-userdict-entries': userCheck.entries },
-									`${userCheck.entries} ${t('settings.userDictUnit')}${userDirty ? ` · ${t('settings.unsaved')}` : ''}`,
+									{ className: 'ia_udHead' },
+									el(
+										'span',
+										{ className: 'ia_udMeta', 'data-ia-userdict-entries': userCheck.entries },
+										`${userCheck.entries} ${t('settings.userDictUnit')}${userDirty ? ` · ${t('settings.unsaved')}` : ''}`,
+									),
+									el(
+										'span',
+										{ className: 'ia_udTools' },
+										el(
+											'button',
+											{
+												type: 'button',
+												className: 'ia_udTool',
+												title: t('settings.udImportHint'),
+												onClick: () => {
+													udFileRef.current?.click()
+												},
+											},
+											t('settings.udImport'),
+										),
+										el(
+											'button',
+											{ type: 'button', className: 'ia_udTool', title: t('settings.udExportHint'), onClick: exportUserDict },
+											t('settings.udExport'),
+										),
+										el(
+											'button',
+											{
+												type: 'button',
+												className: 'ia_udTool',
+												title: t('settings.udCopyHint'),
+												onClick: () => {
+													void copyUserDict()
+												},
+											},
+											t('settings.udCopy'),
+										),
+										el('input', {
+											key: 'ud-file',
+											type: 'file',
+											accept: '.txt,text/plain',
+											className: 'ia_udFile',
+											'aria-hidden': 'true',
+											tabIndex: -1,
+											ref: (node: HTMLInputElement | null): void => {
+												udFileRef.current = node
+											},
+											onChange: onImportPicked,
+										}),
+									),
 								),
 							),
 							el('div', { key: 'ud-hint', className: 'ia_srowHint' }, t('settings.userDictHint')),
+							udFlash !== null ? el('div', { key: 'ud-note', className: 'ia_udNote', role: 'status' }, udFlash) : null,
 							el(
 								'div',
 								{
@@ -1564,11 +1701,27 @@ export function apply(ctx: PluginContext): void {
 					// —— 自定义词库（仅本浏览器） ——
 					'settings.userDictGroup': '自定义词库（仅本浏览器）',
 					'settings.userDictHint':
-						'左列错词、右列正词，中英文皆可；同名错词覆盖内置词，正词与错词相同则不再检查该词。只保存在本浏览器，不随 settings.yaml 同步，换浏览器需自行复制。',
+						'左列错词、右列正词，中英文皆可；同名错词覆盖内置词，正词与错词相同则不再检查该词。只保存在本浏览器，不随 settings.yaml 同步，换浏览器用「导出 / 导入」搬运。',
 					'settings.userDictLabel': '自定义词库列表',
 					'settings.userDictUnit': '条',
 					'settings.userDictStoreFailed': '无法写入本浏览器存储（可能处于隐私模式或存储已满），词库未保存',
 					'settings.udAdd': '添加词条',
+					'settings.udImport': '导入',
+					'settings.udExport': '导出',
+					'settings.udCopy': '复制',
+					'settings.udImportHint': '从 .txt 文件导入：一行一条「错词 => 正词」，同名错词就地更新、其余追加，导入后仍需保存',
+					'settings.udExportHint': '下载为 .txt 文件（与内置词库同格式，含当前未保存的修改）',
+					'settings.udCopyHint': '复制全部词条到剪贴板（含当前未保存的修改）',
+					'settings.udImportDone': '导入完成：',
+					'settings.udAdded': '新增',
+					'settings.udUpdated': '更新',
+					'settings.udIgnored': '忽略',
+					'settings.udLines': '行',
+					'settings.udImportEmpty': '文件里没有可识别的词条（一行一条：错词 => 正词）',
+					'settings.udImportFailed': '读取文件失败',
+					'settings.udFileTooBig': '文件超过 1MB，已取消导入',
+					'settings.udCopied': '已复制',
+					'settings.udCopyFailed': '复制失败：浏览器未授权剪贴板',
 					'settings.udEmpty': '还没有自定义词条',
 					'settings.udWrongPh': '错词',
 					'settings.udRightPh': '正词',
@@ -1640,11 +1793,28 @@ export function apply(ctx: PluginContext): void {
 					// —— Custom dictionary (this browser only) ——
 					'settings.userDictGroup': 'Custom dictionary (this browser only)',
 					'settings.userDictHint':
-						'Left: wrong word; right: correction — Chinese or English. Same-key entries override the builtin ones; mapping a word to itself stops checking it. Stored in this browser only (not synced via settings.yaml).',
+						'Left: wrong word; right: correction — Chinese or English. Same-key entries override the builtin ones; mapping a word to itself stops checking it. Stored in this browser only (not synced via settings.yaml); use Export / Import to move it between browsers.',
 					'settings.userDictLabel': 'Custom dictionary list',
 					'settings.userDictUnit': 'entries',
 					'settings.userDictStoreFailed': 'Cannot write to browser storage (private mode or quota exceeded); dictionary not saved',
 					'settings.udAdd': 'Add entry',
+					'settings.udImport': 'Import',
+					'settings.udExport': 'Export',
+					'settings.udCopy': 'Copy',
+					'settings.udImportHint':
+						'Import from a .txt file — one pair per line ("wrong => right"); same-key rows update in place, the rest append; still needs Save after import',
+					'settings.udExportHint': 'Download as .txt (same format as builtin dicts; includes unsaved edits)',
+					'settings.udCopyHint': 'Copy all entries to the clipboard (includes unsaved edits)',
+					'settings.udImportDone': 'Imported: ',
+					'settings.udAdded': 'added',
+					'settings.udUpdated': 'updated',
+					'settings.udIgnored': 'ignored',
+					'settings.udLines': 'lines',
+					'settings.udImportEmpty': 'No recognizable entries in the file (one pair per line: wrong => right)',
+					'settings.udImportFailed': 'Could not read the file',
+					'settings.udFileTooBig': 'File exceeds 1 MB; import cancelled',
+					'settings.udCopied': 'Copied',
+					'settings.udCopyFailed': 'Copy failed: clipboard unavailable',
 					'settings.udEmpty': 'No custom entries yet',
 					'settings.udWrongPh': 'wrong',
 					'settings.udRightPh': 'correct',

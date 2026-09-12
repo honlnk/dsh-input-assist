@@ -176,6 +176,67 @@ test('checkUserDictPairs：词条数上限（超限置 overflow，错误挂区�
 	assert.deepEqual(res.issues, [])
 })
 
+// —— 导入/导出：导入计数、合并语义、导出回环 ——
+test('importUserDictText：词条与被忽略行分开计数，注释空行不算忽略', () => {
+	const res = api.importUserDictText('# 注释\n\n帐号 => 账号\n没有分隔符\n=> 空错词\nalot => a lot\n')
+	assert.deepEqual(res.pairs, [
+		{ wrong: '帐号', right: '账号' },
+		{ wrong: 'alot', right: 'a lot' },
+	])
+	assert.equal(res.ignored, 2)
+	assert.deepEqual(api.importUserDictText(''), { pairs: [], ignored: 0 })
+})
+
+test('mergeUserDictPairs：同错词就地更新、新词追加、导入内同名后者覆盖', () => {
+	const merged = api.mergeUserDictPairs(
+		[
+			{ wrong: '帐号', right: '账号' },
+			{ wrong: '', right: '' },
+		],
+		[
+			{ wrong: '新词', right: '先到' },
+			{ wrong: '帐号', right: '账户' },
+			{ wrong: '新词', right: '后到' },
+		],
+	)
+	assert.deepEqual(merged.rows, [
+		{ wrong: '帐号', right: '账户', fromCurrent: 0 },
+		{ wrong: '', right: '', fromCurrent: 1 },
+		{ wrong: '新词', right: '后到', fromCurrent: -1 },
+	])
+	assert.equal(merged.added, 1)
+	assert.equal(merged.updated, 1)
+})
+
+test('mergeUserDictPairs：半填行（只有错词）被导入补全，空行不被匹配', () => {
+	const merged = api.mergeUserDictPairs([{ wrong: '半填', right: '' }], [{ wrong: '半填', right: '补全' }])
+	assert.deepEqual(merged.rows, [{ wrong: '半填', right: '补全', fromCurrent: 0 }])
+	assert.equal(merged.updated, 1)
+	assert.equal(merged.added, 0)
+})
+
+test('exportUserDictText：注释头 + 有效词条，半填行不导出，解析回环', () => {
+	const text = api.exportUserDictText([
+		{ wrong: '帐号', right: '账号' },
+		{ wrong: '', right: '' },
+		{ wrong: '半', right: '' },
+	])
+	assert.ok(text.startsWith('#'))
+	assert.ok(text.includes('帐号 => 账号'))
+	assert.ok(!text.includes('半 =>'))
+	const back = api.importUserDictText(text)
+	assert.deepEqual(back.pairs, [{ wrong: '帐号', right: '账号' }])
+	assert.equal(back.ignored, 0)
+	// 空表也导出注释头（可再导入，等价无词库）
+	assert.ok(api.exportUserDictText([]).startsWith('#'))
+	// 全链路回环：导出 → 导入 → 并入空表 = 原有效词条
+	const merged = api.mergeUserDictPairs([], back.pairs)
+	assert.deepEqual(
+		merged.rows.map(({ wrong, right }) => ({ wrong, right })),
+		[{ wrong: '帐号', right: '账号' }],
+	)
+})
+
 // —— apply() 注册断言 ——
 test('apply() 注册 settings.plugin.item 卡片（key=input-assist）', () => {
 	const registrations = []
