@@ -31,7 +31,7 @@
         "name": "dsh-input-assist",
         "applicationCategory": "DeveloperApplication",
         "operatingSystem": "macOS, Linux, Windows",
-        "softwareVersion": "0.2.0",
+        "softwareVersion": "0.4.0",
         "url": "https://dsh-input-assist.honlnk.com/",
         "description": "DeepSeek Harness（dsh）Web UI 输入助手插件：AI 输入补全（ghost text，Tab 逐词采纳）与中英混排错别字检查（本地词典 + LLM 上下文校对，含英文拼写与专有名词大小写），带图形化设置页与浏览器本地自定义词库。",
         "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
@@ -60,7 +60,7 @@
           {
             "@type": "Question",
             "name": "能添加自己的错词吗？",
-            "acceptedAnswer": { "@type": "Answer", "text": "能。设置卡片底部「自定义词库（仅本浏览器）」一行一条「错词 => 正词」，中英文皆可，与内置词库合并参与本地检查；同名错词覆盖内置项，写成自映射（错词 => 错词）可禁用某个内置词。英文词条自动走词边界匹配，驼峰、snake_case 这类标识符不会误报。数据只存在本浏览器 localStorage。" }
+            "acceptedAnswer": { "@type": "Answer", "text": "能。设置卡片底部「自定义词库（仅本浏览器）」是一张成对词条列表：左列错词、右列正词，点「＋ 添加词条」追加一行，× 删除，拖动调整顺序，中英文皆可，与内置词库合并参与本地检查；同名错词覆盖内置项，写成自映射（错词 => 错词）可禁用某个内置词。英文词条自动走词边界匹配，驼峰、snake_case 这类标识符不会误报。数据只存在本浏览器 localStorage。" }
           },
           {
             "@type": "Question",
@@ -361,7 +361,7 @@
       </div>
       <div class="card">
         <h3>自定义词库<span class="tag tag-green">本地 · 免费</span></h3>
-        <p>设置卡片底部可维护你自己的错词表，一行一条「错词 =&gt; 正词」：补充领域术语的误打，同名错词覆盖内置项，<code>错词 =&gt; 错词</code> 可禁用某个内置词。只存本浏览器（localStorage），不上传不同步；保存后当前草稿立即重新标红。</p>
+        <p>设置卡片底部是一张成对词条列表：左列错词、右列正词，「＋ 添加词条」追加一行，× 删除，拖动调整顺序，动画平滑。补充领域术语的误打，同名错词覆盖内置项，<code>错词 =&gt; 错词</code> 可禁用某个内置词。只存本浏览器（localStorage），不上传不同步；保存后当前草稿立即重新标红。</p>
       </div>
     </div>
   </div>
@@ -426,7 +426,7 @@
       </details>
       <details>
         <summary>能添加自己的错词吗？</summary>
-        <p>能。设置卡片底部「自定义词库（仅本浏览器）」一行一条「错词 =&gt; 正词」，中英文皆可，与内置词库合并参与本地检查；同名错词覆盖内置项，写成自映射（错词 =&gt; 错词）可禁用某个内置词。英文词条自动走词边界匹配，驼峰、snake_case 这类标识符不会误报。数据只存在本浏览器 localStorage，换设备直接复制文本粘贴过去即可。</p>
+        <p>能。设置卡片底部「自定义词库（仅本浏览器）」是一张成对词条列表：左列错词、右列正词，「＋ 添加词条」追加一行，× 删除，拖动调整顺序，中英文皆可，与内置词库合并参与本地检查；同名错词覆盖内置项，写成自映射（错词 =&gt; 错词）可禁用某个内置词。英文词条自动走词边界匹配，驼峰、snake_case 这类标识符不会误报。数据只存在本浏览器 localStorage。</p>
       </details>
       <details>
         <summary>支持哪些 dsh 版本？</summary>
