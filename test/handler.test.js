@@ -33,6 +33,7 @@ test('config.get 返回默认配置', async () => {
 	assert.equal(res.ok, true)
 	assert.equal(res.value.completionModel, 'deepseek-flash')
 	assert.equal(res.value.completionEnabled, true)
+	assert.equal(res.value.completionStream, true)
 })
 
 test('config.set 只接受白名单键并做类型清洗', async () => {
@@ -40,12 +41,14 @@ test('config.set 只接受白名单键并做类型清洗', async () => {
 	const res = await handler('config.set', {
 		completionEnabled: false,
 		completionDebounceMs: '300',
+		completionStream: false,
 		proofreadModel: 42, // 类型不符应被丢弃
 		hackKey: 'x',
 	})
 	assert.equal(res.ok, true)
 	assert.equal(res.value.completionEnabled, false)
 	assert.equal(res.value.completionDebounceMs, 300)
+	assert.equal(res.value.completionStream, false)
 	assert.equal(res.value.proofreadModel, 'deepseek-flash')
 	assert.ok(!('hackKey' in res.value))
 })

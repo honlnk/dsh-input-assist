@@ -2,7 +2,7 @@
 
 DeepSeek Harness（dsh）输入助手插件：
 
-- **输入补全（ghost text）** — 打字停顿后调用 DeepSeek FIM 接口（`/beta/completions`），灰色建议**内联在光标后**（NovAI 同款：镜像层透明占位 + 灰字），`Tab` 逐词采纳、`Shift+Tab` 全量采纳、`Esc` 关闭
+- **输入补全（ghost text）** — 打字停顿后调用 DeepSeek FIM 接口（`/beta/completions`），灰色建议**内联在光标后**（NovAI 同款：镜像层透明占位 + 灰字），**SSE 流式逐字渐显**（首 token 到即上屏，边生成边变长），`Tab` 逐词采纳（流中采纳不断流）、`Shift+Tab` 全量采纳、`Esc` 关闭
 - **错别字检查** — 双层检测：**词典层在浏览器本地运行**（228 条中文错词 + 211 条英文错拼/专名大小写 + 8 条上下文规则，词库数据在 `data/` 下纯文本维护，可叠加浏览器本地自定义词库；200ms 即时标红、离线零成本）+ LLM 上下文校对（中英混排：在/再、的/得/地及英文拼写，800ms 防抖与补全同节奏）。**文中红字标注**（红色波浪线，当前项高亮，点红字选中），导航条逐条修正，绝不全量替换
 
 ## 补全快捷键（建议灰字出现时生效）
@@ -72,6 +72,7 @@ API key 三选一（补全与 LLM 检查层需要；词典层无需任何配置�
 | `completionModel` | `deepseek-flash` | 补全模型（输入框可下拉选择，⟳ 从 API 拉取目录） |
 | `completionDebounceMs` | `800` | 停笔多久后请求建议（与 LLM 校对同节奏） |
 | `completionMaxTokens` | `64` | 建议长度上限 |
+| `completionStream` | `true` | 补全走 SSE 流式逐字渐显；接口不支持流式时关闭改整段返回 |
 | `proofreadEnabled` | `true` | 错别字检查开关（「校」按钮同效） |
 | `proofreadUseLlm` | `true` | 是否叠加 LLM 检查层（关掉则完全不花钱） |
 | `proofreadModel` | `deepseek-flash` | LLM 检查模型（同上，下拉选择） |
@@ -108,18 +109,20 @@ npm test        # build → tsc --noEmit → node --test（类型错在本地即
 - [docs/11-自定义词库列表编辑器-实施记录.md](./docs/11-自定义词库列表编辑器-实施记录.md) — 自定义词库列表编辑器实施记录：pairs 编辑视图、拖拽 + FLIP 动画、按钮对合并
 - [docs/12-在途请求取消-实施记录.md](./docs/12-在途请求取消-实施记录.md) — 在途请求取消实施记录：requestId + cancel 端点、cancelled 错误码、触发点与兼容性
 - [docs/13-自定义词库导入导出-实施记录.md](./docs/13-自定义词库导入导出-实施记录.md) — 自定义词库导入/导出实施记录：.txt 同格式互导、合并语义、纯浏览器侧实现
+- [docs/14-流式渐进渲染-实施记录.md](./docs/14-流式渐进渲染-实施记录.md) — 流式渐进渲染实施记录：fetch 流式路由传输层调研、SSE 帧协议、Tab 流中采纳、降级矩阵
 
 ## 架构一览
 
 ```
 浏览器半边（lib/client.js，tsdown 从 src/client.ts 打包）   host 半边（lib/index.js）
   input.overlay  仅错误提示（无浮层）     loopback    settings 命名空间 input-assist
-  input.dock     错别字面板+修正      ───RPC /input-assist───▶  complete   → FIM /beta/completions
+  input.dock     错别字面板+修正      ───RPC /input-assist───▶  complete   → FIM /beta/completions（非流式）
   input.right    补/校 开关                             proofread → LLM 层（llmOnly）
-                                                        cancel     → 断开在途请求（重调度/Esc/关开关）
+  fetch POST /api/input-assist/stream  ──fetch 路由──▶     cancel     → 断开在途请求（RPC 与流式一视同仁）
+    ↳ SSE 帧驱动 ghost 逐字渐显                stream 路由 → FIM stream:true，帧回写 {delta}/{done}
   settings.plugin.item  设置页卡片（Plugins→插件配置）    config.get/set → 设置文档读写
   useInput 读草稿 · inputActions.setDraft 写回
-  镜像层（body 挂载）：文中红字 + 光标后灰色 ghost 建议
+  镜像层（body 挂载）：文中红字 + 光标后灰色 ghost 建议（rAF 合帧渲染）
   词典层本地运行（单源 src/proofread-dict.ts，构建时打进 client bundle）
 ```
 
@@ -138,7 +141,7 @@ npm test        # build → tsc --noEmit → node --test（类型错在本地即
 - [x] 真实 Chrome 手感验收：快捷键实测（2026-09-13 通过；点击、设置卡片、词库区块已于 2026-09-12 dsh 真机验证）
 - [x] 在途请求取消（重新输入重调度 / Esc / 关开关即断开未完成的补全与 LLM 校对请求，迟到响应不复活、不白烧 token；2026-09-13 真机验证通过，含防抖窗口内 Esc）
 - [x] 自定义词库导入/导出（.txt 同格式：导入合并进暂存列表、导出下载/复制到剪贴板；2026-09-13 真机验证通过）
-- [ ] 流式渐进渲染（SSE 首 token 渐显；取消链路已就绪，见 docs/12）
+- [ ] 流式渐进渲染（SSE 首 token 渐显 + 半路掐断；代码与测试已完成，真机验收待做）
 
 ## 发布流程
 

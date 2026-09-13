@@ -11,6 +11,8 @@ export interface InputAssistConfig {
 	completionModel: string
 	completionDebounceMs: number
 	completionMaxTokens: number
+	/** 补全走 SSE 流式渐进渲染；关掉则整段返回（兼容不支持流式的端点）。 */
+	completionStream: boolean
 	proofreadEnabled: boolean
 	proofreadUseLlm: boolean
 	proofreadModel: string
@@ -29,6 +31,7 @@ export const DEFAULT_CONFIG: InputAssistConfig = {
 	completionModel: 'deepseek-flash',
 	completionDebounceMs: 800,
 	completionMaxTokens: 64,
+	completionStream: true,
 	proofreadEnabled: true,
 	proofreadUseLlm: true,
 	proofreadModel: 'deepseek-flash',

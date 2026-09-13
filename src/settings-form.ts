@@ -26,6 +26,7 @@ export const SETTINGS_FIELDS: readonly SettingsFieldSpec[] = [
 	{ key: 'completionModel', kind: 'string', group: 'completion', model: true },
 	{ key: 'completionDebounceMs', kind: 'number', group: 'completion' },
 	{ key: 'completionMaxTokens', kind: 'number', group: 'completion' },
+	{ key: 'completionStream', kind: 'toggle', group: 'completion' },
 	{ key: 'proofreadEnabled', kind: 'toggle', group: 'proofread' },
 	{ key: 'proofreadUseLlm', kind: 'toggle', group: 'proofread' },
 	{ key: 'proofreadModel', kind: 'string', group: 'proofread', model: true },

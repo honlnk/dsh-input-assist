@@ -15,6 +15,10 @@
 //   吃光后自动再请求一轮。IME 组合期一律放行。
 //   在途取消（v0.5）：重新输入重调度 / Esc / 关开关时发 cancel RPC 让
 //   host 断开未完成的请求（序号守卫只丢结果，cancel 才省 token）。
+//   流式渐进渲染（v0.6）：默认直连 host 的 /api/input-assist/stream
+//   （connection.fetch 流式路由），SSE 帧驱动 ghost 逐字渐显；Tab 流中
+//   采纳不断流（剩余建议继续被在途 delta 追加）；host 旧版本无该路由
+//   （404）或配置关闭时自动走 RPC 整段返回。
 //
 // 错别字交互（v2）：
 //   检出后导航条出现，当前选中的错字在文本中加重高亮（红字 + 底色），
@@ -64,6 +68,7 @@ export { loadUserDictText, saveUserDictText }
 export { scanWithUserDict }
 export { SETTINGS_FIELDS, stageValue, unstageValue, isFieldStaged, fieldText, fieldChecked, parseStagedPatch }
 export { checkUserDictPairs, parseUserDictPairs, serializeUserDictPairs, importUserDictText, mergeUserDictPairs, exportUserDictText, USER_DICT_MAX_ENTRIES, USER_DICT_MAX_WORD_LEN }
+export { parseStreamFrames }
 
 export const inject = ['slots', 'locale', 'connection', 'remote']
 
@@ -420,6 +425,18 @@ let llmReqId = ''
 // 只取消已发出的请求会漏掉防抖窗口——请求随后照发，ghost 仍会迟到上屏。
 let completionTimerPending = false
 
+// —— 流式渐进渲染（v0.6）——
+// 浏览器直连 host 的 /api/input-assist/stream（connection.fetch 流式路由），
+// SSE 帧驱动 ghost 渐显。streamRouteDown：host 是不带该路由的旧版本
+// （fetch 回 404），此后本轮会话直接走 RPC 非流式（重载页面重新探测）。
+let completionStreamCtrl: AbortController | null = null
+let streamRouteDown = false
+// 当前流内簿记：累积文本 streamAccumulated 与已被 Tab 采纳的字符数
+// streamAccepted——流中按 Tab 后剩余建议 = accumulated.slice(accepted)，
+// 在途 delta 持续追加到末尾（NovAI 同款语义：采纳不掐流）
+let streamAccumulated = ''
+let streamAccepted = 0
+
 const nextRequestId = (kind: 'c' | 'l'): string => {
 	requestSeq += 1
 	const rand =
@@ -438,7 +455,7 @@ const cancelRpc = (requestId: string): void => {
 /** 本轮补全是否仍可能产出建议（排队或请求在途）。 */
 const completionRoundActive = (): boolean => completionTimerPending || completionReqId !== ''
 
-/** 彻底作废本轮补全：清排队定时器、断在途请求、作废迟到响应。 */
+/** 彻底作废本轮补全：清排队定时器、断在途请求（RPC 与流式两路）、作废迟到响应。 */
 const abortCompletionRound = (): void => {
 	clearTimeout(completionTimer)
 	completionTimerPending = false
@@ -446,6 +463,10 @@ const abortCompletionRound = (): void => {
 	if (completionReqId !== '') {
 		cancelRpc(completionReqId)
 		completionReqId = ''
+	}
+	if (completionStreamCtrl !== null) {
+		completionStreamCtrl.abort()
+		completionStreamCtrl = null
 	}
 	setAssist({ suggestion: '', fetching: false, sugRev: -1 })
 }
@@ -679,6 +700,172 @@ const syncDockRows = (): void => {
 	}
 }
 
+// —— 流式消费（v0.6）——
+// host 的流式路由帧协议：data:{"delta":"…"} 增量 / data:{"done":"全文"}
+// 终态（host 侧已归一化）/ data:{"error":"…"} 失败；流关闭即结束。
+const STREAM_ENDPOINT = '/api/input-assist/stream'
+
+interface StreamFrameView {
+	/** 完整帧里的 data 载荷（原始字符串，未 JSON.parse）。 */
+	payloads: string[]
+	/** 不完整尾部（跨网络分片缓冲，拼进下一轮）。 */
+	rest: string
+}
+
+/** SSE 文本 → 完整帧载荷列表 + 残余。纯函数，亦为 bundle 测试出口。 */
+function parseStreamFrames(buffer: string): StreamFrameView {
+	const frames = buffer.replace(/\r\n/g, '\n').split('\n\n')
+	const rest = frames.pop() ?? ''
+	const payloads: string[] = []
+	for (const frame of frames) {
+		for (const raw of frame.split('\n')) {
+			const line = raw.trim()
+			if (!line.startsWith('data:')) continue
+			const payload = line.slice(5).trim()
+			if (payload !== '') payloads.push(payload)
+		}
+	}
+	return { payloads, rest }
+}
+
+interface StreamFinishers {
+	/** 成功：写入最终建议（含 sugRev/sugDraft 上下文）。 */
+	ok: (text: string) => void
+	/** 前置失败（no-api-key 等_reason 语义）。 */
+	reason: (reason: string) => void
+	/** 网络层错误（错误条）。 */
+	error: (message: string) => void
+}
+
+/**
+ * 走 host 流式路由请求一轮补全。返回 false 仅当路由不存在（404，host
+ * 是旧版本）——调用方置 streamRouteDown 并降级走 RPC 非流式。取消语义：
+ * 本模块任何一处 abort（重调度/Esc/关开关）都会 abort ctrl，此处静默
+ * 收场；host 侧同时经 cancel RPC / 连接断开两路掐断上游。
+ */
+const runCompletionStream = async (
+	reqId: string,
+	cSeq: number,
+	rev: number,
+	draft: string,
+	caret: number,
+	finish: StreamFinishers,
+): Promise<boolean> => {
+	const ctrl = new AbortController()
+	completionStreamCtrl = ctrl
+	streamAccumulated = ''
+	streamAccepted = 0
+	let sawAny = false
+	try {
+		const res = await fetch(STREAM_ENDPOINT, {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({
+				prefix: draft.slice(0, caret),
+				suffix: draft.slice(caret),
+				requestId: reqId,
+			}),
+			signal: ctrl.signal,
+		})
+		if (res.status === 404) {
+			streamRouteDown = true
+			return false
+		}
+		if (!res.ok || res.body === null) {
+			// 前置失败：host 以 JSON {reason} 回应（no-api-key 等）
+			let reason = `completion stream HTTP ${res.status}`
+			try {
+				const j: unknown = await res.json()
+				if (isObj(j) && typeof j.reason === 'string' && j.reason !== '') reason = j.reason
+			} catch {
+				/* 保持 HTTP 状态文案 */
+			}
+			if (cSeq === completionSeq) finish.reason(reason)
+			return true
+		}
+		const reader = res.body.getReader()
+		const decoder = new TextDecoder('utf-8')
+		let buffer = ''
+		let doneText: string | null = null
+		let errorMessage = ''
+		// rAF 合帧渲染：自制 store 没有 Vue 式批处理，每个 delta 直写会
+		// 触发一整次镜像层重建；flush 在帧回调里一次性取「当下」的
+		// accumulated/accepted 切片（Tab 同步改 accepted，帧回调自然读到新值）
+		let flushScheduled = false
+		let contextWritten = false
+		const flush = (): void => {
+			flushScheduled = false
+			if (cSeq !== completionSeq) return
+			const text = streamAccumulated.slice(streamAccepted)
+			if (text === '') return
+			if (!contextWritten) {
+				contextWritten = true
+				setAssist({ suggestion: text, sugRev: rev, sugDraft: draft, sugCaret: caret, fetching: true })
+			} else {
+				setAssist({ suggestion: text, fetching: true })
+			}
+		}
+		const scheduleFlush = (): void => {
+			if (flushScheduled) return
+			flushScheduled = true
+			const run = (): void => {
+				flushScheduled = false
+				flush()
+			}
+			if (typeof requestAnimationFrame === 'function') requestAnimationFrame(run)
+			else setTimeout(run, 16)
+		}
+		for (;;) {
+			const { done, value } = await reader.read()
+			if (done) break
+			const parsed = parseStreamFrames(buffer + decoder.decode(value, { stream: true }))
+			buffer = parsed.rest
+			for (const payload of parsed.payloads) {
+				let frame: unknown
+				try {
+					frame = JSON.parse(payload)
+				} catch {
+					continue
+				}
+				if (!isObj(frame)) continue
+				if (typeof frame.delta === 'string' && frame.delta !== '') {
+					sawAny = true
+					streamAccumulated += frame.delta
+					if (cSeq === completionSeq) scheduleFlush()
+				} else if (typeof frame.done === 'string') {
+					doneText = frame.done
+				} else if (typeof frame.error === 'string' && frame.error !== '') {
+					errorMessage = frame.error
+				}
+			}
+			if (doneText !== null || errorMessage !== '') break
+		}
+		if (cSeq !== completionSeq) return true
+		if (errorMessage !== '' && !sawAny && streamAccepted === 0) {
+			// 空手失败走错误条（与 RPC 失败同路）
+			finish.error(errorMessage)
+			return true
+		}
+		if (streamAccepted === 0 && doneText !== null) {
+			finish.ok(doneText)
+		} else {
+			// Tab 采纳过 / 流中断无 done / 出错但有部分内容：本地切片收尾，
+			// 保留 Tab 写入的 sugDraft/sugRev 上下文（不回写请求时的旧值）
+			const source = doneText ?? streamAccumulated
+			const remainder = source.slice(streamAccepted).replace(/\s+$/, '')
+			if (remainder === '') setAssist({ suggestion: '', fetching: false, sugRev: -1 })
+			else setAssist({ suggestion: remainder, fetching: false })
+		}
+		return true
+	} catch (err) {
+		if (ctrl.signal.aborted) return true // 自己断的（重调度/Esc/关开关）：静默
+		if (cSeq === completionSeq) finish.error(err instanceof Error ? err.message : String(err))
+		return true
+	} finally {
+		if (completionStreamCtrl === ctrl) completionStreamCtrl = null
+	}
+}
+
 function onDraftChanged(draft: string, rev: number): void {
 	const cfg = configStore.getSnapshot()
 	const caret = composerCaret() ?? draft.length
@@ -695,9 +882,17 @@ function onDraftChanged(draft: string, rev: number): void {
 
 	clearTimeout(completionTimer)
 	completionTimerPending = false
-	cancelRpc(completionReqId)
-	completionReqId = ''
-	completionSeq += 1
+	if (!justAccepted) {
+		cancelRpc(completionReqId)
+		completionReqId = ''
+		if (completionStreamCtrl !== null) {
+			completionStreamCtrl.abort()
+			completionStreamCtrl = null
+		}
+		completionSeq += 1
+	}
+	// justAccepted 时本轮继续：流式在途请求不断（剩余建议靠在途 delta 追加，
+	// NovAI 同款语义），也不作废序号——序号一变流式守卫会整体失效
 	const cSeq = completionSeq
 	if (!completionActive) {
 		setAssist({ suggestion: '', fetching: false, sugRev: -1 })
@@ -708,6 +903,36 @@ function onDraftChanged(draft: string, rev: number): void {
 			completionReqId = reqId
 			debug({ completionReqId: reqId }) // 调试探针：请求在途窗口可观测（控制台/__iaDebug）
 			setAssist({ fetching: true })
+			const finishOk = (text: string): void => {
+				setAssist({
+					suggestion: text,
+					sugRev: rev,
+					sugDraft: draft,
+					sugCaret: caret,
+					fetching: false,
+					error: '',
+					errorRev: -1,
+				})
+			}
+			const finishReason = (reason: string): void => {
+				setAssist({ suggestion: '', fetching: false, error: reason, errorRev: rev })
+			}
+			const finishError = (message: string): void => {
+				setAssist({ suggestion: '', fetching: false, error: message, errorRev: rev })
+			}
+			// —— 流式路径（默认开）：host 旧版本无路由时 fetch 回 404，
+			//    runCompletionStream 置 streamRouteDown 并返回 false，本次降级 RPC ——
+			if (cfg.completionStream && !streamRouteDown) {
+				const handled = await runCompletionStream(reqId, cSeq, rev, draft, caret, {
+					ok: finishOk,
+					reason: finishReason,
+					error: finishError,
+				})
+				if (handled) {
+					if (completionReqId === reqId) completionReqId = ''
+					return
+				}
+			}
 			try {
 				const res = await rpc<CompleteResult>('complete', {
 					prefix: draft.slice(0, caret),
@@ -730,12 +955,7 @@ function onDraftChanged(draft: string, rev: number): void {
 				} else if (res !== undefined && res.ok === false && res.error.code === 'cancelled') {
 					// 主动取消（Esc / 关开关 / 取消竞态）：静默，不写状态不弹错误条
 				} else {
-					setAssist({
-						suggestion: '',
-						fetching: false,
-						error: res !== undefined && res.ok === false ? res.error.message : 'completion failed',
-						errorRev: rev,
-					})
+					finishError(res !== undefined && res.ok === false ? res.error.message : 'completion failed')
 				}
 			} catch (err) {
 				debug({ completionErr: err instanceof Error ? err.message : String(err) })
@@ -743,7 +963,7 @@ function onDraftChanged(draft: string, rev: number): void {
 			} finally {
 				if (completionReqId === reqId) completionReqId = ''
 			}
-			}, cfg.completionDebounceMs)
+		}, cfg.completionDebounceMs)
 		completionTimerPending = true
 	}
 
@@ -1689,6 +1909,8 @@ export function apply(ctx: PluginContext): void {
 					'settings.f.completionDebounceMs': '补全防抖（毫秒）',
 					'settings.h.completionDebounceMs': '停笔多久后请求建议',
 					'settings.f.completionMaxTokens': '建议长度上限（token）',
+					'settings.f.completionStream': '流式输出',
+					'settings.h.completionStream': '建议随生成逐字渐显（SSE）；接口不支持流式时关闭，改整段返回',
 					'settings.f.proofreadEnabled': '启用错别字检查',
 					'settings.h.proofreadEnabled': '文中红字标注、导航条逐条修正（输入框「校」按钮同效）',
 					'settings.f.proofreadUseLlm': '启用 LLM 检查层',
@@ -1781,6 +2003,8 @@ export function apply(ctx: PluginContext): void {
 					'settings.f.completionDebounceMs': 'Completion debounce (ms)',
 					'settings.h.completionDebounceMs': 'How long to wait after typing before requesting',
 					'settings.f.completionMaxTokens': 'Suggestion length cap (tokens)',
+					'settings.f.completionStream': 'Streaming output',
+					'settings.h.completionStream': 'Show the suggestion progressively as it generates (SSE); turn off if the endpoint does not support streaming',
 					'settings.f.proofreadEnabled': 'Enable typo checking',
 					'settings.h.proofreadEnabled': 'In-text red marks with a fix navigator (same as the “校” button)',
 					'settings.f.proofreadUseLlm': 'Enable LLM layer',
@@ -2058,6 +2282,9 @@ export function apply(ctx: PluginContext): void {
 			// 逐词采纳：只吞下一个分词单位；Shift+Tab 全量采纳
 			const chunk = e.shiftKey ? assist.suggestion : nextSegment(assist.suggestion)
 			if (chunk === '') return
+			// 流式在途：记下已采纳字符数，剩余建议 = accumulated.slice(accepted)，
+			// 在途 delta 继续追加到末尾（显示可能落后一帧，前缀关系仍成立）
+			if (completionStreamCtrl !== null) streamAccepted += chunk.length
 			const caret = typeof target.selectionStart === 'number' ? target.selectionStart : target.value.length
 			const next = target.value.slice(0, caret) + chunk + target.value.slice(caret)
 			const rest = assist.suggestion.slice(chunk.length)

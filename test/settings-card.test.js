@@ -44,9 +44,9 @@ function loadBundleExports() {
 
 const api = loadBundleExports()
 
-// —— 字段清单：11 项配置全部上卡片，分组正确 ——
+// —— 字段清单：12 项配置全部上卡片，分组正确 ——
 test('SETTINGS_FIELDS 覆盖全部配置键且分组齐全', () => {
-	assert.equal(api.SETTINGS_FIELDS.length, 11)
+	assert.equal(api.SETTINGS_FIELDS.length, 12)
 	const keys = api.SETTINGS_FIELDS.map((f) => f.key)
 	assert.deepEqual([...keys].sort(), Object.keys(DEFAULT_CONFIG).sort())
 	for (const f of api.SETTINGS_FIELDS) {
@@ -71,6 +71,29 @@ test('fieldText/fieldChecked 暂存值优先于当前配置，unstage 撤销', (
 	staged = api.unstageValue(staged, 'completionModel')
 	assert.equal(api.isFieldStaged(spec, staged), false)
 	assert.equal(staged.completionModel, undefined)
+})
+
+// —— 流式开关（v0.6）：toggle 暂存 boolean，默认开 ——
+test('completionStream 上卡片为 toggle，暂存与默认值正确', () => {
+	const spec = api.SETTINGS_FIELDS.find((f) => f.key === 'completionStream')
+	assert.equal(spec.kind, 'toggle')
+	assert.equal(spec.group, 'completion')
+	assert.equal(DEFAULT_CONFIG.completionStream, true)
+	assert.equal(api.fieldChecked(spec, { completionStream: false }, DEFAULT_CONFIG), false)
+	assert.equal(api.fieldChecked(spec, {}, DEFAULT_CONFIG), true)
+})
+
+// —— 流式帧解析（v0.6）：bundle 出口的纯函数 ——
+test('parseStreamFrames 切出完整帧载荷并保留跨分片残余', () => {
+	const first = api.parseStreamFrames('data: {"delta":"你"}\n\ndata: {"de')
+	assert.deepEqual(first.payloads, ['{"delta":"你"}'])
+	assert.equal(first.rest, 'data: {"de')
+	const second = api.parseStreamFrames(`${first.rest}lta":"好"}\n\n`)
+	assert.deepEqual(second.payloads, ['{"delta":"好"}'])
+	assert.equal(second.rest, '')
+	// CRLF 行尾与 data: 前缀空白容忍
+	const crlf = api.parseStreamFrames('data: {"delta":"A"}\r\n\r\ndata:[DONE]\r\n\r\n')
+	assert.deepEqual(crlf.payloads, ['{"delta":"A"}', '[DONE]'])
 })
 
 // —— 解析：合法补丁（trim / 数字转换 / 布尔直通 / apiKey 允许空）——
