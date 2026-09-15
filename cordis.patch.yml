@@ -5,7 +5,11 @@
 #   config.get / config.set  - read / merge-persist the namespace
 #   complete                 - DeepSeek FIM completion proxy (non-stream v1)
 #   proofread                - local typo dictionary scan + optional LLM check
+#   stream                   - SSE streaming completion (connection.fetch route)
+# 0.1.5-rc.2: connection.rpc.handle() registers its prefix route through the
+#   calling plugin's ctx (owner.webServer), so the entry must inject webServer
+#   too — "cannot get property webServer without inject" otherwise.
 - insert:
     - id: input-assist
       name: dsh-input-assist
-      inject: [connection]
+      inject: [connection, webServer]

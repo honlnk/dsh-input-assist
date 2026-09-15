@@ -33,7 +33,7 @@
 // 由 tsdown 打包进 lib/client.js（ModuleLoader 壳由 tsdown banner/footer 提供）。
 
 import * as react from 'react'
-import { createSnapshotStore, type SnapshotStore } from '@deepseek-ai/dsh-client-runtime/client'
+import { createSnapshotStore, type SnapshotStore } from './snapshot-store.js'
 import { NS, CHANNEL, DEFAULT_CONFIG, type InputAssistConfig } from './config.js'
 import { scanLocalTypos, scanWithDict, mergeDicts, BUILTIN_DICT, parseDictText, type TypoIssue } from './proofread-dict.js'
 import { loadUserDictText, saveUserDictText, type DictStorage } from './user-dict.js'
@@ -363,8 +363,23 @@ const setAssist = (patch: Partial<AssistState>): void => {
 	assistStore.set({ ...assistStore.getSnapshot(), ...patch })
 }
 
-const rpc = <T = unknown,>(endpoint: string, payload: unknown): Promise<RpcResult<T> | undefined> =>
-	connectionRef!.rpc.call<T>(CHANNEL, endpoint, payload)
+// RPC 双路（dsh 0.1.5 迁移）：优先打 host 侧 connection.fetch 精确路由
+// （/api/input-assist/rpc，body {endpoint,payload} → RpcResult JSON）；404
+// （老运行时没有该路由）自动回退 cordis rpc.call 原通道，两端运行时都通。
+const rpc = async <T = unknown,>(endpoint: string, payload: unknown): Promise<RpcResult<T> | undefined> => {
+	try {
+		const res = await fetch('/api/input-assist/rpc', {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({ endpoint, payload }),
+		})
+		if (res.ok) return (await res.json()) as RpcResult<T>
+		if (res.status !== 404) return undefined
+	} catch (_err) {
+		/* 网络层失败 → 回退 rpc.call 再试一次 */
+	}
+	return connectionRef!.rpc.call<T>(CHANNEL, endpoint, payload)
+}
 
 const loadConfig = async (): Promise<void> => {
 	try {

@@ -20,15 +20,15 @@ export default defineConfig([
 		outputOptions: { entryFileNames: '[name].js' },
 	},
 	{
-		// 浏览器半边：CJS + ModuleLoader 壳；react / dsh-client-runtime 由宿主
-		// 种子模块提供（external），本地模块（词典等）打包进 bundle
+		// 浏览器半边：CJS + ModuleLoader 壳；react 由宿主种子模块提供
+		// （external），本地模块（词典、snapshot store 等）打包进 bundle
 		entry: { client: 'src/client.ts' },
 		outDir: 'lib',
 		format: 'cjs',
 		dts: false,
 		sourcemap: true,
 		target: 'chrome110',
-		external: ['react', '@deepseek-ai/dsh-client-runtime/client'],
+		external: ['react'],
 		minify: false,
 		outputOptions: {
 			entryFileNames: '[name].js',

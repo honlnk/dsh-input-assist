@@ -110,20 +110,22 @@ npm test        # build → tsc --noEmit → node --test（类型错在本地即
 - [docs/12-在途请求取消-实施记录.md](./docs/12-在途请求取消-实施记录.md) — 在途请求取消实施记录：requestId + cancel 端点、cancelled 错误码、触发点与兼容性
 - [docs/13-自定义词库导入导出-实施记录.md](./docs/13-自定义词库导入导出-实施记录.md) — 自定义词库导入/导出实施记录：.txt 同格式互导、合并语义、纯浏览器侧实现
 - [docs/14-流式渐进渲染-实施记录.md](./docs/14-流式渐进渲染-实施记录.md) — 流式渐进渲染实施记录：fetch 流式路由传输层调研、SSE 帧协议、Tab 流中采纳、降级矩阵
+- [docs/16-dsh-0.1.5-适配.md](./docs/16-dsh-0.1.5-适配.md) — dsh 0.1.5-rc.2 适配：webServer 注入、snapshot store 收编、RPC over fetch 双路径（0.1.1 旧运行时兼容）
 
 ## 架构一览
 
 ```
 浏览器半边（lib/client.js，tsdown 从 src/client.ts 打包）   host 半边（lib/index.js）
   input.overlay  仅错误提示（无浮层）     loopback    settings 命名空间 input-assist
-  input.dock     错别字面板+修正      ───RPC /input-assist───▶  complete   → FIM /beta/completions（非流式）
-  input.right    补/校 开关                             proofread → LLM 层（llmOnly）
-  fetch POST /api/input-assist/stream  ──fetch 路由──▶     cancel     → 断开在途请求（RPC 与流式一视同仁）
-    ↳ SSE 帧驱动 ghost 逐字渐显                stream 路由 → FIM stream:true，帧回写 {delta}/{done}
-  settings.plugin.item  设置页卡片（Plugins→插件配置）    config.get/set → 设置文档读写
-  useInput 读草稿 · inputActions.setDraft 写回
+  input.dock     错别字面板+修正      ───RPC（0.1.5+：fetch 路由 /api/input-assist/rpc；
+  input.right    补/校 开关               ≤0.1.1：rpc.handle /input-assist）───▶
+  fetch POST /api/input-assist/stream                complete   → FIM /beta/completions（非流式）
+    ↳ SSE 帧驱动 ghost 逐字渐显                      proofread → LLM 层（llmOnly）
+  settings.plugin.item  设置页卡片（Plugins→插件配置）  cancel     → 断开在途请求（RPC 与流式一视同仁）
+  useInput 读草稿 · inputActions.setDraft 写回          stream 路由 → FIM stream:true，帧回写 {delta}/{done}
   镜像层（body 挂载）：文中红字 + 光标后灰色 ghost 建议（rAF 合帧渲染）
   词典层本地运行（单源 src/proofread-dict.ts，构建时打进 client bundle）
+  自带 snapshot store（src/snapshot-store.ts，结构满足宿主 ObservableSnapshot 契约）
 ```
 
 ## 状态
@@ -142,6 +144,7 @@ npm test        # build → tsc --noEmit → node --test（类型错在本地即
 - [x] 在途请求取消（重新输入重调度 / Esc / 关开关即断开未完成的补全与 LLM 校对请求，迟到响应不复活、不白烧 token；2026-09-13 真机验证通过，含防抖窗口内 Esc）
 - [x] 自定义词库导入/导出（.txt 同格式：导入合并进暂存列表、导出下载/复制到剪贴板；2026-09-13 真机验证通过）
 - [ ] 流式渐进渲染（SSE 首 token 渐显 + 半路掐断；代码与测试已完成，真机验收待做）
+- [x] 适配 dsh 0.1.5-rc.2（2026-09-15：cordis webServer 注入、client-runtime 消亡收编 snapshot store、RPC over fetch 双路径；0.1.1 旧运行时兼容，116 测试全绿 + 真机 curl 冒烟通过）
 
 ## 发布流程
 

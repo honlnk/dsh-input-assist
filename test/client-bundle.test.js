@@ -1,9 +1,10 @@
 // Client bundle guard (TS 化后取代 dict-sync 测试):词典曾以 DICT-SHARED
 // 标记块在 host/browser 两份拷贝间逐字同步;现在单一源在 src/proofread-dict.ts,
-// 由 tsdown 打进 lib/client.js。本测试用假 ModuleLoader + 假 react/runtime
-// 真正执行 bundle 产物,验证:
+// 由 tsdown 打进 lib/client.js。本测试用假 ModuleLoader + 假 react 真正执行
+// bundle 产物,验证:
 //   1. ModuleLoader 壳完整(banner/footer,CJS exports 形状)
-//   2. react / dsh-client-runtime 保持外部依赖(require 宿主种子,未被打包)
+//   2. react 保持外部依赖(require 宿主种子,未被打包);snapshot store 已收编
+//      进 bundle(0.1.5 起 dsh-client-runtime 消亡,不再有第二个 external)
 //   3. 词典数据确实进了 bundle 且行为正确(错词/上下文规则/掩码)
 
 import { readFileSync } from 'node:fs'
@@ -22,9 +23,9 @@ test('bundle 被 ModuleLoader 壳包裹且不再有 DICT-SHARED 标记', () => {
 	assert.ok(!clientSource.includes('DICT-SHARED'), 'stale DICT-SHARED marker from the pre-TS era')
 })
 
-test('react / dsh-client-runtime 是外部依赖而非打包内容', () => {
+test('react 是唯一外部依赖，snapshot store 已打进 bundle', () => {
 	assert.ok(clientSource.includes('require("react")'))
-	assert.ok(clientSource.includes('require("@deepseek-ai/dsh-client-runtime/client")'))
+	assert.ok(!clientSource.includes('require("@deepseek-ai/dsh-client-runtime/client")'), 'dsh-client-runtime 已于 0.1.5 消亡，不应再被 require')
 	assert.ok(!clientSource.includes('createElementWithValidation'), 'react 本体不应被打进来')
 })
 
@@ -38,16 +39,8 @@ function loadBundleExports() {
 	new Function(clientSource)()
 	assert.ok(captured !== null, 'ModuleLoader.load 未被调用')
 	const reactStub = { createElement: () => null, useEffect: () => {} }
-	const runtimeStub = {
-		createSnapshotStore: (init) => ({
-			getSnapshot: () => init,
-			set: () => {},
-			subscribe: () => () => {},
-		}),
-	}
 	return captured.factory((id) => {
 		if (id === 'react') return reactStub
-		if (id === '@deepseek-ai/dsh-client-runtime/client') return runtimeStub
 		throw new Error(`unexpected require: ${id}`)
 	})
 }

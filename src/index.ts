@@ -20,7 +20,9 @@ import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { settingsNamespace } from '@deepseek-ai/dsh-settings'
+// 仅类型用途：引入 cordis Context 的 settings 服务声明（模块增强）。
+// 0.1.5 起不再导出 settingsNamespace 帮助函数，register 直接收字符串。
+import '@deepseek-ai/dsh-settings'
 import z from '@deepseek-ai/schemastery'
 import type { Context } from '@deepseek-ai/cordis'
 import { requestFimCompletion, streamFimCompletion, normalizeSuggestion, listModels } from './completion.js'
@@ -276,6 +278,40 @@ interface SettingsScope {
 // 栅栏，http-bridge 逐块背压流出，gzip 中间件显式豁免 text/event-stream。
 export const STREAM_PATH = '/api/input-assist/stream'
 
+// —— RPC over fetch（dsh 0.1.5 迁移）——
+// 0.1.5-rc.2 起 connection.rpc.handle() 注册路由要经 owner.webServer，而
+// traceable 影子 ctx 的服务解析根在 connection 插件自己的 fiber 链上，第三
+// 方插件注入的 webServer 永远不可达 → 启动即抛 "cannot get property
+// webServer without inject"（上游回归，官方包自身只走 intercept / fetch 两
+// 条内存表路径）。故 0.1.5+ 上 RPC 改挂 connection.fetch 精确路由（body 为
+// {endpoint, payload}，响应即 RpcResult JSON）；0.1.1-rc.2 老运行时没有
+// connection.fetch，保留 rpc.handle 原路径。浏览器半边先试本路由、404 自动
+// 回退 rpc.call，两端新旧运行时都通。
+export const RPC_FETCH_PATH = '/api/input-assist/rpc'
+
+export function createRpcFetchHandler(
+	handler: (endpoint: string, payload: unknown) => Promise<RpcResult<unknown>>,
+): (request: Request) => Promise<Response> {
+	return async (request) => {
+		let endpoint = ''
+		let payload: unknown = {}
+		try {
+			const parsed: unknown = await request.json()
+			if (isPlainObject(parsed)) {
+				endpoint = typeof parsed.endpoint === 'string' ? parsed.endpoint : ''
+				payload = parsed.payload
+			}
+		} catch {
+			/* 非 JSON body → endpoint '' → handler 走默认错误路径 */
+		}
+		const result = await handler(endpoint, payload)
+		return new Response(JSON.stringify(result), {
+			status: 200,
+			headers: { 'content-type': 'application/json' },
+		})
+	}
+}
+
 const sseFrame = (payload: Record<string, string>): string => `data: ${JSON.stringify(payload)}\n\n`
 
 export interface StreamFetchDeps {
@@ -485,10 +521,17 @@ export function createWebServerStreamRoute(handler: (request: Request) => Promis
 function apply(ctx: Context): void {
 	let scope: SettingsScope | undefined = undefined
 	ctx.inject(['settings'], (settingsCtx) => {
-		scope = settingsCtx.settings.register(settingsNamespace(NS), ConfigSchema) as unknown as SettingsScope
+		// 0.1.5：register 直接收命名空间字符串，旧 settingsNamespace 帮助函数已移除
+		scope = settingsCtx.settings.register(NS, ConfigSchema) as unknown as SettingsScope
 	})
 
-	const connection = ctx.get('connection') as ConnectionService | undefined
+	// 0.1.5：service 用属性访问（ctx.connection）获取——cordis traceable
+	// 代理把「读取方 ctx」绑定进 service；ctx.get('connection') 绑定的是
+	// 根 ctx，拿到的 service 在 0.1.5 上注册 RPC 会因 shadow 链解析不到
+	// webServer 而启动即抛错（详见下方 RPC over fetch 注释）。
+	const connectionOf = (c: Context): ConnectionService | undefined =>
+		(c as unknown as { connection?: ConnectionService }).connection
+	const connection = connectionOf(ctx)
 	if (connection === undefined) return
 
 	const getConfig = (): InputAssistConfig => scope?.get() ?? { ...DEFAULT_CONFIG }
@@ -502,18 +545,22 @@ function apply(ctx: Context): void {
 		},
 		inflight,
 	})
-
-	ctx.effect(
-		() => connection.rpc.handle(CHANNEL, handler, { authority: 'loopback' }),
-		'input-assist: rpc channel',
-	)
-
-	// 流式路由：优先 connection.fetch（新运行时，自带 Host/Origin/cookie
-	// 鉴权栅栏）；缺席时降级 webServer exact 路由（老运行时，自接栅栏）。
-	// 两条都注册不上（极老运行时）则静默跳过——浏览器半边收到 404 会自动
-	// 降级走 RPC 非流式路径。
 	const streamFetch = createStreamFetchHandler({ getConfig, inflight })
+
 	if (connection.fetch !== undefined) {
+		// 新运行时（0.1.5+）：RPC 与流式都走 connection.fetch 精确路由
+		// （内存表注册，不触 webServer；自动继承 Host/Origin/browserAuth 栅栏）。
+		const rpcFetch = createRpcFetchHandler(handler)
+		ctx.effect(
+			() =>
+				connection.fetch!.register({
+					path: RPC_FETCH_PATH,
+					methods: ['POST'],
+					requestBody: 'buffered',
+					fetch: rpcFetch,
+				}),
+			'input-assist: rpc fetch route',
+		)
 		ctx.effect(
 			() =>
 				connection.fetch!.register({
@@ -525,6 +572,14 @@ function apply(ctx: Context): void {
 			'input-assist: completion stream route',
 		)
 	} else {
+		// 旧运行时（≤0.1.1-rc.2，无 connection.fetch）：RPC 走 rpc.handle
+		// 原路径（该版本注册不触 webServer，可正常工作）；流式降级
+		// webServer exact 路由（自接栅栏）。两条都注册不上则静默跳过——
+		// 浏览器半边收到 404 会自动降级走 RPC 非流式路径。
+		ctx.effect(
+			() => connection.rpc.handle(CHANNEL, handler, { authority: 'loopback' }),
+			'input-assist: rpc channel',
+		)
 		ctx.inject(['webServer'], (webCtx) => {
 			const webServer = (webCtx as unknown as { webServer: WebServerService }).webServer
 			ctx.effect(
