@@ -111,6 +111,7 @@ npm test        # build → tsc --noEmit → node --test（类型错在本地即
 - [docs/13-自定义词库导入导出-实施记录.md](./docs/13-自定义词库导入导出-实施记录.md) — 自定义词库导入/导出实施记录：.txt 同格式互导、合并语义、纯浏览器侧实现
 - [docs/14-流式渐进渲染-实施记录.md](./docs/14-流式渐进渲染-实施记录.md) — 流式渐进渲染实施记录：fetch 流式路由传输层调研、SSE 帧协议、Tab 流中采纳、降级矩阵
 - [docs/16-dsh-0.1.5-适配.md](./docs/16-dsh-0.1.5-适配.md) — dsh 0.1.5-rc.2 适配：webServer 注入、snapshot store 收编、RPC over fetch 双路径（0.1.1 旧运行时兼容）
+- [docs/17-输入框contenteditable适配.md](./docs/17-输入框contenteditable适配.md) — 输入框 contenteditable 适配：0.1.5 composer 换 Lexical 后 ghost 无声不弹的根因与全链路修复（双运行时）
 
 ## 架构一览
 
@@ -143,8 +144,9 @@ npm test        # build → tsc --noEmit → node --test（类型错在本地即
 - [x] 真实 Chrome 手感验收：快捷键实测（2026-09-13 通过；点击、设置卡片、词库区块已于 2026-09-12 dsh 真机验证）
 - [x] 在途请求取消（重新输入重调度 / Esc / 关开关即断开未完成的补全与 LLM 校对请求，迟到响应不复活、不白烧 token；2026-09-13 真机验证通过，含防抖窗口内 Esc）
 - [x] 自定义词库导入/导出（.txt 同格式：导入合并进暂存列表、导出下载/复制到剪贴板；2026-09-13 真机验证通过）
-- [ ] 流式渐进渲染（SSE 首 token 渐显 + 半路掐断；代码与测试已完成，真机验收待做）
+- [x] 流式渐进渲染（SSE 首 token 渐显 + 半路掐断；代码与测试已完成，2026-09-20 真机验收通过：SSE 帧驱动 ghost 渐显、Tab 流中采纳）
 - [x] 适配 dsh 0.1.5-rc.2（2026-09-15：cordis webServer 注入、client-runtime 消亡收编 snapshot store、RPC over fetch 双路径；0.1.1 旧运行时兼容，116 测试全绿 + 真机 curl 冒烟通过）
+- [x] 输入框 contenteditable 适配（2026-09-20：0.1.5 composer 换 Lexical contenteditable 导致 ghost 无声不弹；findComposer 双运行时定位、光标块级走查、镜像层/Tab 采纳/键盘拦截全链路适配，真机浏览器验收通过，详见 [docs/17](./docs/17-输入框contenteditable适配.md)）
 
 ## 发布流程
 

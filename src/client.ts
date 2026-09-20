@@ -515,15 +515,57 @@ const rescanDict = (): void => {
 	})
 }
 
-const findTextarea = (): HTMLTextAreaElement | null => {
-	const el = document.querySelector('[data-composer-card] textarea')
-	return el instanceof HTMLTextAreaElement ? el : null
+// —— 输入框定位（双运行时）——
+// dsh 0.1.5+：composer 是 Lexical contenteditable（data-composer-card 卡片
+// 内 role=textbox 的 [data-composer-input] div，@ 引用渲染为 chip 节点）；
+// ≤0.1.1-rc.2：普通 textarea。文本真值一律以 input store 的 draft 为准
+// （Lexical DOM 的 textContent 与 chip 序列化对不齐），DOM 只负责元素
+// 定位与光标偏移。
+type ComposerEl = HTMLTextAreaElement | HTMLDivElement
+
+const BLOCK_TAGS = ['P', 'DIV', 'LI', 'UL', 'OL', 'H1', 'H2', 'H3', 'H4', 'PRE']
+const isBlockElement = (node: Node): boolean =>
+	node.nodeType === Node.ELEMENT_NODE && BLOCK_TAGS.includes((node as Element).tagName)
+
+const findComposer = (): ComposerEl | null => {
+	const div = document.querySelector<HTMLDivElement>('[data-composer-card] [data-composer-input][contenteditable="true"]')
+	if (div !== null) return div
+	const ta = document.querySelector('[data-composer-card] textarea')
+	return ta instanceof HTMLTextAreaElement ? ta : null
 }
 
 const composerCaret = (): number | null => {
-	const el = findTextarea()
-	if (el !== null && typeof el.selectionStart === 'number') return el.selectionStart
-	return null
+	const el = findComposer()
+	if (el === null) return null
+	if (el instanceof HTMLTextAreaElement) return typeof el.selectionStart === 'number' ? el.selectionStart : null
+	// contenteditable：anchor 所在块之前的文本长度 + 块间换行数 + 块内偏移，
+	// 与 draft 的 \n 分行约定对齐（chip 内文本按显示文本近似；偏移超界时
+	// 由调用方回退 draft.length）
+	const sel = window.getSelection()
+	if (sel === null || sel.rangeCount === 0 || sel.anchorNode === null || !el.contains(sel.anchorNode)) return null
+	const anchorNode = sel.anchorNode
+	const anchorOffset = sel.anchorOffset
+	const blocks = Array.from(el.children).filter((n) => isBlockElement(n)) as HTMLElement[]
+	const roots: HTMLElement[] = blocks.length > 0 ? blocks : [el]
+	let base = 0
+	for (const block of roots) {
+		let inner: number | null = null
+		let acc = 0
+		const walk = (node: Node): void => {
+			if (inner !== null) return
+			if (node === anchorNode) {
+				const len = node.nodeType === Node.TEXT_NODE ? (node.textContent?.length ?? 0) : node.childNodes.length
+				inner = Math.min(anchorOffset, len)
+				return
+			}
+			if (node.nodeType === Node.TEXT_NODE) acc += node.textContent?.length ?? 0
+			else Array.from(node.childNodes).forEach(walk)
+		}
+		walk(block)
+		if (inner !== null) return base + inner // 走查长度天然 ≤ DOM 文本长度，无需外部钳制
+		base += acc + 1 // 块内文本长度 + 块间换行
+	}
+	return null // anchor 不在任何块内（如 root 自身）：调用方回退末尾
 }
 
 /** 光标所在行以 / 或 @ 开头（斜杠菜单、@ 引用）时不触发补全。 */
@@ -538,8 +580,7 @@ const effectiveIssues = (): TypoIssue[] => {
 	const a = assistStore.getSnapshot()
 	const merged = mergeIssues(a.dictIssues, a.llmIssues)
 	if (merged.length === 0) return []
-	const ta = findTextarea()
-	const text = ta !== null ? ta.value : ''
+	const text = lastDraft
 	if (text === '') return []
 	const ignored = Array.isArray(a.ignored) ? a.ignored : []
 	return merged.filter(
@@ -567,13 +608,15 @@ const navFixCurrent = (): void => {
 	if (eff.length === 0) return
 	const a = assistStore.getSnapshot()
 	const issue = eff[Math.min(typeof a.issueIndex === 'number' ? a.issueIndex : 0, eff.length - 1)]
-	const ta = findTextarea()
-	if (ta === null) return
-	const text = ta.value
+	const text = lastDraft
 	if (text.slice(issue.offset, issue.offset + issue.orig.length) !== issue.orig) return // 位置已失效
 	if (inputActionsRef !== null && typeof inputActionsRef.setDraft === 'function') {
 		inputActionsRef.setDraft(text.slice(0, issue.offset) + issue.fix + text.slice(issue.offset + issue.orig.length))
 	} else {
+		// 旧运行时无 setDraft 时的 execCommand 兜底只对 textarea 成立；
+		// contenteditable 依赖 Lexical 选中态，该路径不可靠，直接跳过
+		const ta = findComposer()
+		if (!(ta instanceof HTMLTextAreaElement)) return
 		ta.focus()
 		ta.setSelectionRange(issue.offset, issue.offset + issue.orig.length)
 		try {
@@ -615,7 +658,7 @@ const mirrorStyleProps = [
 	'wordBreak',
 ] as const
 
-const copyMirrorMetrics = (ta: HTMLTextAreaElement, el: HTMLDivElement): void => {
+const copyMirrorMetrics = (ta: HTMLElement, el: HTMLDivElement): void => {
 	const cs = getComputedStyle(ta)
 	for (const prop of mirrorStyleProps) el.style[prop] = cs[prop]
 	el.style.boxSizing = 'border-box'
@@ -654,12 +697,14 @@ const ensureMirror = (): HTMLDivElement => {
 const ghostVisible = (): boolean => {
 	const a = assistStore.getSnapshot()
 	const cfg = configStore.getSnapshot()
-	return cfg.completionEnabled && a.suggestion !== '' && a.sugDraft === (findTextarea()?.value ?? null)
+	// 建议是否仍对应当前草稿：contenteditable 时代以 input store 的 draft
+	// 为真值（DOM textContent 与 chip 序列化不对齐，不能作比较基准）
+	return cfg.completionEnabled && a.suggestion !== '' && findComposer() !== null && a.sugDraft === lastDraft
 }
 
 const syncMirror = (): void => {
 	if (typeof document === 'undefined') return
-	const ta = findTextarea()
+	const ta = findComposer()
 	const typos = ta !== null && navActive()
 	const ghost = ta !== null && ghostVisible()
 	if (!typos && !ghost) {
@@ -673,7 +718,7 @@ const syncMirror = (): void => {
 	const eff = typos ? effectiveIssues() : []
 	const a = assistStore.getSnapshot()
 	const curIdx = Math.min(typeof a.issueIndex === 'number' ? a.issueIndex : 0, eff.length - 1)
-	const text = ta.value
+	const text = lastDraft
 	let html = ''
 	let pos = 0
 	for (let i = 0; i < eff.length; i += 1) {
@@ -2231,7 +2276,11 @@ export function apply(ctx: PluginContext): void {
 				},
 			})
 		const target = e.target
-		if (!(target instanceof HTMLTextAreaElement)) return
+		if (!(target instanceof HTMLElement)) return
+		// 0.1.5+ 输入面是 contenteditable div（子节点也可能是事件目标，
+		// isContentEditable 对其后代继承为 true）；旧运行时是 textarea
+		const inTextarea = target instanceof HTMLTextAreaElement
+		if (!inTextarea && !target.isContentEditable) return
 		if (target.closest('[data-composer-card]') === null) return
 		const assist = assistStore.getSnapshot()
 
@@ -2268,7 +2317,7 @@ export function apply(ctx: PluginContext): void {
 		}
 
 		// —— 补全 Tab 逐词采纳 / Esc（建议优先）——
-		if (assist.suggestion === '' || assist.sugDraft !== target.value) {
+		if (assist.suggestion === '' || assist.sugDraft !== lastDraft) {
 			if (e.key === 'Escape') {
 				// 无可见建议时 Esc：忽略本次错别字提醒（如有检出）；
 				// 补全本轮（排队或在途）一并作废——否则迟到响应会把 ghost 凭空弹出
@@ -2300,12 +2349,14 @@ export function apply(ctx: PluginContext): void {
 			// 流式在途：记下已采纳字符数，剩余建议 = accumulated.slice(accepted)，
 			// 在途 delta 继续追加到末尾（显示可能落后一帧，前缀关系仍成立）
 			if (completionStreamCtrl !== null) streamAccepted += chunk.length
-			const caret = typeof target.selectionStart === 'number' ? target.selectionStart : target.value.length
-			const next = target.value.slice(0, caret) + chunk + target.value.slice(caret)
+			// 双运行时统一走 draft 真值 + composerCaret（textarea 的
+			// selectionStart 与 contenteditable 的选区走查在这里合流）
+			const caret = composerCaret() ?? lastDraft.length
+			const next = lastDraft.slice(0, caret) + chunk + lastDraft.slice(caret)
 			const rest = assist.suggestion.slice(chunk.length)
 			if (inputActionsRef !== null && typeof inputActionsRef.setDraft === 'function') {
 				inputActionsRef.setDraft(next)
-			} else {
+			} else if (target instanceof HTMLTextAreaElement) {
 				target.focus()
 				try {
 					document.execCommand('insertText', false, chunk)
