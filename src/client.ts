@@ -1,12 +1,14 @@
 // dsh-input-assist — browser half (client half).
 // 布局参考 dsh-composer-enter（双侧插件的浏览器侧接线）与 dsh-voice-input
-// （inputActions.setDraft 写草稿）。UI 座位全部 additive：
+// （inputActions.insertText / setDraft 写草稿）。UI 座位全部 additive：
 //   conversation.input.overlay — 仅补全错误提示（建议本体由镜像层 ghost text 渲染）
 //   conversation.input.dock    — 错别字导航条（上一个/下一个/修正/标记正确/忽略）
 //   conversation.input.right   — 「补 / 校」两个功能开关
-//   settings.plugin.item       — 设置页卡片（Settings → Plugins → 插件配置，
-//                                keyed by 命名空间；宿主 ui-settings-plugins
-//                                渲染卡片列表 = Host 已服务命名空间 ∩ 注册 key）
+//   plugins.bundle.config      — 插件管理页设置卡（侧栏 Plugins →
+//                                dsh-input-assist 详情页「配置」区，
+//                                keyed by bundle 包名；0.2.x 起宿主把插件
+//                                设置收纳进插件管理页，旧 settings.plugin.item
+//                                插座已删除）
 //   镜像层（body 挂载）— 文中红字标注错字 + 光标后灰色 ghost 建议（NovAI 同款）
 //
 // 补全交互（v3 ghost text）：
@@ -34,7 +36,7 @@
 
 import * as react from 'react'
 import { createSnapshotStore, type SnapshotStore } from './snapshot-store.js'
-import { NS, CHANNEL, DEFAULT_CONFIG, type InputAssistConfig } from './config.js'
+import { NS, CHANNEL, PKG_NAME, DEFAULT_CONFIG, type InputAssistConfig } from './config.js'
 import { scanLocalTypos, scanWithDict, mergeDicts, BUILTIN_DICT, parseDictText, type TypoIssue } from './proofread-dict.js'
 import { loadUserDictText, saveUserDictText, type DictStorage } from './user-dict.js'
 import { mergeIssues } from './proofread-llm.js'
@@ -69,6 +71,7 @@ export { scanWithUserDict }
 export { SETTINGS_FIELDS, stageValue, unstageValue, isFieldStaged, fieldText, fieldChecked, parseStagedPatch }
 export { checkUserDictPairs, parseUserDictPairs, serializeUserDictPairs, importUserDictText, mergeUserDictPairs, exportUserDictText, USER_DICT_MAX_ENTRIES, USER_DICT_MAX_WORD_LEN }
 export { parseStreamFrames }
+export { buildMirrorHtml }
 
 export const inject = ['slots', 'locale', 'connection', 'remote']
 
@@ -106,7 +109,7 @@ interface InjectedPayload {
 }
 interface SlotRegistration {
 	name: string
-	/** list 插座用 id 排序导航；keyed 插座（settings.plugin.item）用 key 且无序。 */
+	/** list 插座用 id 排序导航；keyed 插座（plugins.bundle.config）用 key 且无序。 */
 	id?: string
 	key?: string
 	order?: number
@@ -135,8 +138,18 @@ interface InputState {
 	draftRev: number
 }
 type UseStore<T> = <R>(selector: (state: T) => R) => R
+/** 0.2.x 的按选区插入锚点：captureInsertion 捕获、insertText 消费（CAS 于 draftRev）。 */
+interface TokenSpan {
+	start: number
+	end: number
+	draftRev: number
+}
 interface InputActions {
 	setDraft(text: string): void
+	/** 捕获当前选区 + 草稿版本，交给 insertText 定位插入（0.2.x；旧运行时缺省）。 */
+	captureInsertion?(): TokenSpan
+	/** 在捕获的 span 处插入文本（光标落在插入之后；draftRev 已变返回 false）。0.2.x；旧运行时缺省。 */
+	insertText?(text: string, span: TokenSpan): boolean
 }
 type Translate = (key: string) => string
 
@@ -689,17 +702,62 @@ const ensureMirror = (): HTMLDivElement => {
 }
 
 // —— 镜像层：错别字红字 + ghost text 共用 ——
-// textarea 自己渲染真实文字（正常色）；镜像层把已输入文字渲染为透明
-// span 仅撑布局（错别字处叠红字、末尾叠灰色 ghost 建议），与 NovAI
-// 的 GhostTextOverlay 同构：已输入部分 invisible 占位，建议自然落在
-// 光标后。ghost 插在文本末尾而非真实光标处——textarea 有建议时用户
-// 光标恒在末尾（点击中间会丢建议），且 suffix 场景 v1 不支持。
+// 输入框自己渲染真实文字（正常色）；镜像层把已输入文字渲染为透明 span
+// 仅撑布局（错别字处叠红字、建议光标处叠灰色 ghost），与 NovAI 的
+// GhostTextOverlay 同构：已输入部分 invisible 占位，建议落在建议发起时
+// 的光标处——句中停笔即句中洞口，句末停笔即文末。
+/**
+ * 镜像层 innerHTML 拼装：错字按 offset 包 ia_typo span（当前项加
+ * ia_typoCur），ghost 按 caret 偏移切进文本（与错字 span 同款分段拼接）。
+ * 纯函数，亦为 bundle 测试出口。
+ * @param text 草稿全文（\n 分行）
+ * @param issues 有效错字（offset 升序、互不重叠）
+ * @param curIdx 当前选中错字下标（无选中传 -1）
+ * @param ghost ghost 建议文本（空串 = 不插入）
+ * @param ghostCaret ghost 插入偏移（越界钳进文本范围；落在错字 span
+ *   内部时顺延到该 span 之后——错字 span 是整体点击目标，不能拆开）
+ * @returns 镜像层 innerHTML 字符串
+ */
+function buildMirrorHtml(text: string, issues: TypoIssue[], curIdx: number, ghost: string, ghostCaret: number): string {
+	let ghostAt: number | null = ghost === '' ? null : Math.min(Math.max(ghostCaret, 0), text.length)
+	for (const it of issues) {
+		if (ghostAt !== null && ghostAt > it.offset && ghostAt < it.offset + it.orig.length) ghostAt = it.offset + it.orig.length
+	}
+	let html = ''
+	let pos = 0
+	const emit = (from: number, to: number): void => {
+		if (ghostAt !== null && ghostAt >= from && ghostAt <= to) {
+			const cut = ghostAt
+			ghostAt = null
+			html += escHtml(text.slice(from, cut)) + `<span class="ia_ghost">${escHtml(ghost)}</span>` + escHtml(text.slice(cut, to))
+			return
+		}
+		html += escHtml(text.slice(from, to))
+	}
+	for (let i = 0; i < issues.length; i += 1) {
+		const it = issues[i]
+		if (it.offset > pos) emit(pos, it.offset)
+		html += `<span class="ia_typo${i === curIdx ? ' ia_typoCur' : ''}" data-ia-off="${it.offset}">${escHtml(text.slice(it.offset, it.offset + it.orig.length))}</span>`
+		pos = it.offset + it.orig.length
+	}
+	emit(pos, text.length)
+	return html
+}
+
 const ghostVisible = (): boolean => {
 	const a = assistStore.getSnapshot()
 	const cfg = configStore.getSnapshot()
 	// 建议是否仍对应当前草稿：contenteditable 时代以 input store 的 draft
-	// 为真值（DOM textContent 与 chip 序列化不对齐，不能作比较基准）
-	return cfg.completionEnabled && a.suggestion !== '' && findComposer() !== null && a.sugDraft === lastDraft
+	// 为真值（DOM textContent 与 chip 序列化不对齐，不能作比较基准）。
+	// 建议针对发起时的光标位置算出，光标挪走（草稿不变）即失效隐藏；
+	// composerCaret 返回 null（选区不在输入框内）同样视为不匹配
+	return (
+		cfg.completionEnabled &&
+		a.suggestion !== '' &&
+		findComposer() !== null &&
+		a.sugDraft === lastDraft &&
+		composerCaret() === a.sugCaret
+	)
 }
 
 const syncMirror = (): void => {
@@ -718,18 +776,7 @@ const syncMirror = (): void => {
 	const eff = typos ? effectiveIssues() : []
 	const a = assistStore.getSnapshot()
 	const curIdx = Math.min(typeof a.issueIndex === 'number' ? a.issueIndex : 0, eff.length - 1)
-	const text = lastDraft
-	let html = ''
-	let pos = 0
-	for (let i = 0; i < eff.length; i += 1) {
-		const it = eff[i]
-		if (it.offset > pos) html += escHtml(text.slice(pos, it.offset))
-		html += `<span class="ia_typo${i === curIdx ? ' ia_typoCur' : ''}" data-ia-off="${it.offset}">${escHtml(text.slice(it.offset, it.offset + it.orig.length))}</span>`
-		pos = it.offset + it.orig.length
-	}
-	html += escHtml(text.slice(pos))
-	if (ghost) html += `<span class="ia_ghost">${escHtml(a.suggestion)}</span>`
-	el.innerHTML = html
+	el.innerHTML = buildMirrorHtml(lastDraft, eff, curIdx, ghost ? a.suggestion : '', ghost ? a.sugCaret : 0)
 	el.scrollTop = ta.scrollTop
 	el.scrollLeft = ta.scrollLeft
 }
@@ -1891,7 +1938,18 @@ function SettingsCard(props: SettingsCardProps): react.ReactElement | null {
 					),
 				)
 			: null,
-	)
+		)
+}
+
+/** plugins.bundle.config 插座入口：宿主插件管理页按 view 派发——
+ *  'page' = bundle 详情页「配置」区渲染完整设置卡（宿主不传官方 form，
+ *  数据通路走本插件自有环回 RPC）；'summary' = 概览一句话（当前宿主仅
+ *  渲染 'page'，按座位契约防御两种取值）。 */
+function PluginConfigCard(props: SettingsCardProps & { view?: 'summary' | 'page' }): react.ReactElement | null {
+	if (props.view === 'summary') {
+		return react.createElement('p', { className: 'ia_scardDesc' }, props.t('settings.description'))
+	}
+	return SettingsCard(props)
 }
 
 export function apply(ctx: PluginContext): void {
@@ -2183,15 +2241,16 @@ export function apply(ctx: PluginContext): void {
 		),
 	)
 
-	// 设置页卡片：宿主 ui-settings-plugins 在 Plugins → 插件配置 tab 按
-	// key（= 设置命名空间）派发；keyed 注册不带 id/order。数据通路复用
-	// 既有 /input-assist RPC（config.get 已在 apply 顶部加载，写走
-	// persistConfig 的乐观更新 + 失败回读），不引入新服务依赖。
-	slots.inject('settings.plugin.item', () =>
+	// 设置卡（0.2.x）：宿主插件管理页在侧栏 Plugins → dsh-input-assist
+	// bundle 详情页「配置」区按 key（= bundle 包名）派发；keyed 注册不带
+	// id/order；t 由 locale 座位注入。数据通路复用既有 /input-assist RPC
+	// （config.get 已在 apply 顶部加载，写走 persistConfig 的乐观更新 +
+	// 失败回读），不引入新服务依赖。
+	slots.inject('plugins.bundle.config', () =>
 		slots.register(
 			{
-				name: 'settings.plugin.item',
-				key: NS,
+				name: 'plugins.bundle.config',
+				key: PKG_NAME,
 				locale: NS,
 				inject: () => ({
 					hooks: { config: configStore },
@@ -2201,10 +2260,13 @@ export function apply(ctx: PluginContext): void {
 					},
 				}),
 			},
-			SettingsCard,
+			PluginConfigCard,
 		),
 	)
 
+	// 0.2.x：ns = profile entry id；本插件 entry id 恰为 input-assist
+	// （cordis.patch.yml），与 NS 同值——设置页写入或 profile 文件外部编辑
+	// 后经此事件回读刷新。
 	if (remote !== undefined) {
 		ctx.effect(
 			() =>
@@ -2214,7 +2276,7 @@ export function apply(ctx: PluginContext): void {
 			'input-assist: settings document watcher',
 		)
 	}
-	// 关开关（按钮 / 设置卡片 / settings.yaml 热同步，任一路径最终都写进
+	// 关开关（按钮 / 设置卡片 / profile 配置热同步，任一路径最终都写进
 	// configStore）时：断开在途请求、作废迟到响应——关掉后 ghost 不复活、
 	// 不弹错误条；重开时也不会冒出关掉前那一刻的旧建议。
 	let lastCfg = configStore.getSnapshot()
@@ -2257,6 +2319,23 @@ export function apply(ctx: PluginContext): void {
 			}
 		}
 	}, 'input-assist: mirror viewport sync')
+
+	// 光标在文内移动（草稿不变）不触发草稿 effect，而 ghost 可见性按
+	// 「当前光标 === 建议光标」判定：挂 selectionchange 重同步镜像层，
+	// 挪动即隐藏，挪回建议光标则恢复。回调先廉价判断选区是否落在
+	// composer 内，避免页面任意选区变化都触发全量重排；IME 组合期
+	// 选区频繁变化，判定不匹配同样只是隐藏 ghost，不做其他处理。
+	const onSelectionChange = (): void => {
+		const sel = document.getSelection()
+		if (sel === null || sel.rangeCount === 0 || sel.anchorNode === null) return
+		const el = findComposer()
+		if (el === null || !el.contains(sel.anchorNode)) return
+		syncMirror()
+	}
+	ctx.effect(() => {
+		document.addEventListener('selectionchange', onSelectionChange)
+		return () => document.removeEventListener('selectionchange', onSelectionChange)
+	}, 'input-assist: selection ghost sync')
 
 	// 键盘拦截（捕获阶段）：
 	//   Tab/Esc        — 补全建议采纳/关闭（仅建议可见且对应当前草稿时）
@@ -2354,22 +2433,37 @@ export function apply(ctx: PluginContext): void {
 			const caret = composerCaret() ?? lastDraft.length
 			const next = lastDraft.slice(0, caret) + chunk + lastDraft.slice(caret)
 			const rest = assist.suggestion.slice(chunk.length)
-			if (inputActionsRef !== null && typeof inputActionsRef.setDraft === 'function') {
-				inputActionsRef.setDraft(next)
-			} else if (target instanceof HTMLTextAreaElement) {
-				target.focus()
-				try {
-					document.execCommand('insertText', false, chunk)
-				} catch (_err) {
-					/* 静默 */
+			// 优先 0.2.x 的 insertText（按捕获选区 CAS 插入，光标落在插入文本
+			// 之后：句中逐词采纳后 ghost 继续跟随光标）；返回 false = draftRev
+			// 已变或编辑器被提交锁定，回退 setDraft（其光标落在草稿末尾，句中
+			// 场景 ghost 因光标不匹配按设计隐藏）
+			const actions = inputActionsRef
+			let inserted = false
+			if (actions !== null && typeof actions.insertText === 'function' && typeof actions.captureInsertion === 'function') {
+				inserted = actions.insertText(chunk, actions.captureInsertion())
+			}
+			if (!inserted) {
+				if (actions !== null && typeof actions.setDraft === 'function') {
+					actions.setDraft(next)
+				} else if (target instanceof HTMLTextAreaElement) {
+					target.focus()
+					try {
+						document.execCommand('insertText', false, chunk)
+					} catch (_err) {
+						/* 静默 */
+					}
 				}
 			}
 			if (rest === '') {
-				// 吃光了：清建议；setDraft 触发的 onDraftChanged 会自动再调度一轮
+				// 吃光了：清建议；插入触发的 onDraftChanged 会自动再调度一轮
 				setAssist({ suggestion: '', fetching: false, sugRev: -1 })
 			} else {
-				// 剩余建议继续显示；onDraftChanged 里 justAccepted 守卫会跳过这次重调度
-				setAssist({ suggestion: rest, sugDraft: next })
+				// 剩余建议继续显示在新光标处（insertText 的光标 = 原光标 +
+				// 吞入长度，与 sugCaret 偏移一致；setDraft 回退路径句中场景
+				// 按设计隐藏）；流式后续 delta 只追加 suggestion、不回写上下文，
+				// 此偏移保持不变；onDraftChanged 里 justAccepted 守卫会跳过
+				// 这次重调度
+				setAssist({ suggestion: rest, sugDraft: next, sugCaret: caret + chunk.length })
 			}
 			return
 		}

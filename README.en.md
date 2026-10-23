@@ -30,6 +30,8 @@ The shortcut hint shows on a dock line **outside** the input box (same spot as t
 
 ## Quick start
 
+Requires dsh ≥ 0.2.1-rc.2 (declared via `engines.dsh`; the host rejects incompatible versions at install/startup — 0.1.x users should stay on plugin 0.7.x).
+
 ```shell
 dsh plugin --profile web add dsh-input-assist   # or @honlnk/dsh-input-assist — identical content
 dsh --profile web          # start, then open http://127.0.0.1:3080
@@ -48,12 +50,12 @@ Website (demo + install guide): https://honlnk.github.io/dsh-input-assist/
 API key — pick one of three (needed by completion and the LLM layer; the dictionary layer needs no configuration at all):
 
 1. Do nothing — the plugin automatically reuses the `DEEPSEEK_API_KEY` already saved in dsh (`.credentials.yaml`) or from the environment
-2. Fill it in the settings page: gear icon at the bottom of the sidebar → **Plugins → Plugin Settings → Input Assist** card (recommended — every option is graphical)
-3. Write `input-assist.completionApiKey: sk-…` in `~/.dsh/settings.yaml`, or run `DEEPSEEK_API_KEY=sk-… dsh web`
+2. Fill it in on the plugin detail page: sidebar **Plugins → dsh-input-assist → config section** → Input Assist card (recommended — every option is graphical)
+3. Run with an environment variable: `DEEPSEEK_API_KEY=sk-… dsh web` (the old way of writing `input-assist.*` into `~/.dsh/settings.yaml` is gone in 0.2.x)
 
-## Settings-page card
+## Settings card (plugin detail page)
 
-Every option can be edited graphically in the dsh settings UI: gear icon at the bottom of the sidebar → **Plugins → Plugin Settings**, expand the “Input Assist” card. The interaction mirrors the official sibling cards (Bash / Agent Loop / Web Search): staged edits → one unified “Save / Discard”, numeric and required-text validation, per-field “unsaved” dots and per-field undo (×). The card registers through the official `settings.plugin.item` slot (keyed by settings namespace) — no extra services required, and external edits to the settings file hot-sync back into the card.
+Every option can be edited graphically in the plugin manager: sidebar **Plugins** → open the **dsh-input-assist** detail page, expand the Input Assist card in the config section. The interaction mirrors the official cards: staged edits → one unified “Save / Discard”, numeric and required-text validation, per-field “unsaved” dots and per-field undo (×). The card registers through the official `plugins.bundle.config` slot (keyed by bundle package name — since 0.2.x plugin settings live in the plugin manager; the old `settings.plugin.item` slot was removed) — no extra services required. Config persists into the plugin's profile entry (`profiles/<name>/cordis.patch.yml`), and external edits still hot-sync back into the card.
 
 The model fields support **fetching the catalog from the API**: click the ▾ square button next to the field to open a custom dropdown that pulls the latest catalog every time it opens; click to fill. The field always stays a free-text input — any custom model name on an OpenAI-compatible endpoint can be typed by hand. If the fetch fails (no key configured, endpoint unreachable) it falls back to manual entry. Default models have followed the official migration: `deepseek-chat` was retired on 2026-07-24; the default is now `deepseek-flash` (V4.1 Flash).
 
@@ -62,11 +64,11 @@ The model fields support **fetching the catalog from the API**: click the ▾ sq
 The “**Custom dictionary (this browser only)**” section at the bottom of the settings card is a paired-entry list: wrong word on the left, correct word on the right, Chinese or English. “＋ Add entry” appends a pair, × deletes a row, drag the row handle to reorder (or focus and move with ↑/↓); add / delete / reorder all animate smoothly.
 
 - Entries are **merged** with the built-in dictionary for the local dictionary-layer scan: an entry with the same wrong word overrides the built-in one; mapping a word to itself (self-mapping) disables checking for that built-in entry; English entries automatically use word-boundary matching (camelCase, snake_case and dot-joined identifiers never false-positive)
-- Stored only in this browser's localStorage (key `dsh-input-assist:user-dict:v1`, format is still one `wrong => right` per line) — **never synced via settings.yaml**
+- Stored only in this browser's localStorage (key `dsh-input-assist:user-dict:v1`, format is still one `wrong => right` per line) — **never synced through plugin config**
 - The header row has “**Import / Export / Copy**”: import picks a `.txt` file (one `wrong => right` per line, same format as the built-in lists, `#` comments); same-word entries update in place, the rest append to the staged list — still reviewable before saving. Export downloads the current list (including unsaved edits) as the same `.txt` format; copy goes to the clipboard. That's how you move dictionaries between browsers and machines
 - Limits: 2000 entries, wrong word ≤ 16 chars; validation issues (empty words, runs of whitespace, overlong, duplicates) show inline per row and block saving; edits share the card-level “Discard / Save” buttons, and a successful save immediately re-highlights the current draft with the new dictionary
 
-## Configuration (settings.yaml → `input-assist`, or edit graphically via the settings card)
+## Configuration (edit graphically on the plugin detail page; persists into the plugin's profile entry config)
 
 | Key | Default | Description |
 | --- | --- | --- |
@@ -107,9 +109,9 @@ Browser half (lib/client.js, bundled from src/client.ts)      Host half (lib/ind
   input.right     补 / 校 toggles                     ≤0.1.1: rpc.handle /input-assist)───▶
   fetch POST /api/input-assist/stream                complete   → FIM /beta/completions (non-stream)
     ↳ SSE frames drive ghost progressive render      proofread → LLM layer (llmOnly)
-  settings.plugin.item  settings card (Plugins → Plugin Settings)   cancel → abort in-flight requests (RPC & stream alike)
-  useInput reads draft · inputActions.setDraft writes back          stream route → FIM stream:true, frames {delta}/{done}
-  Mirror layer (mounted on body): red errors in text + gray ghost suggestion after the cursor (rAF-batched render)
+  plugins.bundle.config  settings card (Plugins → plugin detail page)  cancel → abort in-flight requests (RPC & stream alike)
+  useInput reads draft · inputActions.insertText / setDraft write back  settings.update(entryId, patch) persists into the profile
+  Mirror layer (mounted on body): red errors in text + gray ghost suggestion at the cursor (rAF-batched render)
   Dictionary layer runs locally (single source src/proofread-dict.ts, bundled into the client at build time)
   Ships its own snapshot store (src/snapshot-store.ts, satisfying the host ObservableSnapshot contract)
 ```
@@ -132,6 +134,8 @@ Browser half (lib/client.js, bundled from src/client.ts)      Host half (lib/ind
 - [x] Streaming progressive render (SSE first-token progressive display + mid-stream cut-off; code & tests done, accepted on real hardware 2026-09-20: SSE frames driving ghost growth, mid-stream Tab accept)
 - [x] dsh 0.1.5-rc.2 compatibility (2026-09-15: cordis webServer injection, client-runtime-less snapshot store takeover, RPC over fetch dual path; compatible with the old 0.1.1 runtime — 116 tests green + real-machine curl smoke)
 - [x] Composer contenteditable compatibility (2026-09-20: the 0.1.5 composer switching to a Lexical contenteditable silently broke ghost text; findComposer for both runtimes, cursor block-level walk, mirror layer / Tab accept / keyboard interception adapted end-to-end, accepted in a real browser — see [docs/17](./docs/17-输入框contenteditable适配.md))
+- [x] Mid-sentence completion rendering (ghost positioned at sugCaret instead of appended at the end of the draft; hides when the caret moves away; shifts right on word-by-word accept; buildMirrorHtml extracted as a pure function + 7 unit tests)
+- [x] dsh 0.2.1-rc.2 compatibility (2026-10-23: settings-system migration — volatile Config + `settings.update(entryId)` persisting into the profile, settings card moved to the `plugins.bundle.config` slot, Tab accept now goes through `insertText` so mid-sentence accepts keep the caret in place, `engines.dsh` version gate; 124 tests green + accepted in an isolated dsh 0.2.1-rc.2 environment — see [docs/19](./docs/19-dsh-0.2.1-适配.md))
 
 ## Release process
 

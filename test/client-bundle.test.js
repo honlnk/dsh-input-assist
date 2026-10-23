@@ -143,3 +143,65 @@ test('掩码：行内代码/围栏块/URL 内的错词不标，外面照标', ()
 	assert.deepEqual(hits('干净的句子没有错字。'), [])
 	assert.deepEqual(hits(''), [])
 })
+
+// —— 镜像层 HTML 拼装（buildMirrorHtml：ghost 按光标偏移切进文本，
+//    与错字 span 同款分段拼接；句中停笔灰字落在洞口而非全文末尾） ——
+const typo = (offset, orig) => ({ offset, orig, fix: '正', reason: 'test', source: 'dict' })
+const GHOST = '<span class="ia_ghost">XY</span>'
+
+test('句中 ghost：按 caret 偏移切进文本中间', () => {
+	const build = loadBundleExports().buildMirrorHtml
+	assert.equal(build('ABCD', [], -1, 'XY', 2), `AB${GHOST}CD`)
+	assert.equal(build('ABCD', [], -1, 'XY', 0), `${GHOST}ABCD`)
+})
+
+test('句末 ghost：caret 等于文本长度，越界钳到末尾', () => {
+	const build = loadBundleExports().buildMirrorHtml
+	assert.equal(build('ABC', [], -1, 'XY', 3), `ABC${GHOST}`)
+	assert.equal(build('ABC', [], -1, 'XY', 99), `ABC${GHOST}`)
+	assert.equal(build('ABC', [], -1, 'XY', -5), `${GHOST}ABC`)
+	// 尾段为空（最后一个错字 span 之后）：from === to 也要发出 ghost
+	assert.equal(
+		build('ABC', [typo(1, 'BC')], -1, 'XY', 3),
+		`A<span class="ia_typo" data-ia-off="1">BC</span>${GHOST}`,
+	)
+})
+
+test('ghost 与错字 span 相邻：偏移在 span 前后分别落两侧', () => {
+	const build = loadBundleExports().buildMirrorHtml
+	const typoSpan = '<span class="ia_typo" data-ia-off="2">CD</span>'
+	assert.equal(build('ABCD', [typo(2, 'CD')], -1, 'XY', 2), `AB${GHOST}${typoSpan}`)
+	assert.equal(build('ABCD', [typo(2, 'CD')], -1, 'XY', 4), `AB${typoSpan}${GHOST}`)
+})
+
+test('ghost 偏移落在错字 span 内部：顺延到该 span 之后（不拆 span）', () => {
+	const build = loadBundleExports().buildMirrorHtml
+	assert.equal(
+		build('ABCD', [typo(2, 'CD')], -1, 'XY', 3),
+		`AB<span class="ia_typo" data-ia-off="2">CD</span>${GHOST}`,
+	)
+})
+
+test('多行文本：\\n 原样保留，ghost 与错字按偏移拼接', () => {
+	const build = loadBundleExports().buildMirrorHtml
+	// 我(0)在(1)\n(2)他(3)再(4)在(5)：ghost 落第二行行首（offset 3），
+	// 错字「再」在 4（当前项），\n 原样保留
+	assert.equal(
+		build('我在\n他再在', [typo(4, '再')], 0, 'XY', 3),
+		`我在\n${GHOST}他<span class="ia_typo ia_typoCur" data-ia-off="4">再</span>在`,
+	)
+})
+
+test('ghost 为空串：不产生 ia_ghost span（纯错字渲染不变）', () => {
+	const build = loadBundleExports().buildMirrorHtml
+	assert.equal(
+		build('ABC', [typo(0, 'AB')], 0, '', 0),
+		'<span class="ia_typo ia_typoCur" data-ia-off="0">AB</span>C',
+	)
+	assert.equal(build('ABC', [], -1, '', 2), 'ABC')
+})
+
+test('HTML 转义：文本与 ghost 均经 escHtml', () => {
+	const build = loadBundleExports().buildMirrorHtml
+	assert.equal(build('a<b', [], -1, '<x>&', 1), `a<span class="ia_ghost">&lt;x&gt;&amp;</span>&lt;b`)
+})

@@ -6,6 +6,9 @@
 	"main": "lib/index.js",
 	"license": "MIT",
 	"author": "honlnk",
+	"engines": {
+		"dsh": ">=0.2.1-rc.2 <0.3.0"
+	},
 	"repository": {
 		"type": "git",
 		"url": "git+https://github.com/honlnk/dsh-input-assist.git"
@@ -67,15 +70,16 @@
 		"prepack": "npm run typecheck && npm run gendict && npm run build"
 	},
 	"dependencies": {
-		"@deepseek-ai/dsh-settings": "^0.1.5-rc.2",
-		"@deepseek-ai/schemastery": "^3.18.2"
+		"@deepseek-ai/schemastery": "^3.18.5"
 	},
 	"peerDependencies": {
-		"@deepseek-ai/cordis": "^4.0.1",
+		"@deepseek-ai/cordis": "^4.0.5",
 		"react": "^18.2.0"
 	},
 	"devDependencies": {
-		"@deepseek-ai/cordis": "^4.0.2",
+		"@deepseek-ai/cordis": "^4.0.5",
+		"@deepseek-ai/cordis-plugin-loader": "~1.0.6",
+		"@deepseek-ai/dsh-settings": "^0.2.1-rc.2",
 		"@types/node": "^26.2.0",
 		"@types/react": "^18.3.31",
 		"tsdown": "^0.22.14",

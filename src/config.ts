@@ -3,6 +3,8 @@
 
 export const NS = 'input-assist'
 export const CHANNEL = '/input-assist'
+/** 本插件 npm 包名（= bundle 名）：0.2.x 的 plugins.bundle.config 插座按它派发设置卡。 */
+export const PKG_NAME = 'dsh-input-assist'
 
 export interface InputAssistConfig {
 	completionEnabled: boolean

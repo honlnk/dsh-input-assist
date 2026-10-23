@@ -1,9 +1,13 @@
 // dsh-input-assist — host half (Node).
-// 1) Registers the user-settings namespace `input-assist` (persisted to
-//    <dsh home>/settings.yaml by the host settings service; external file
-//    edits hot-publish to the browser via settings/document-updated).
+// 1) Declares the plugin Config schema (volatile fields; validated by the
+//    dsh Loader, persisted into this plugin's profile entry inside the
+//    profile's cordis.yml). Writes go through the settings service
+//    (settings.update(entryId, patch)); reads dereference the live volatile
+//    references, so profile edits (settings UI, file edits, other tabs)
+//    are reflected without restart — the browser reloads via
+//    settings/document-updated.
 // 2) Owns the loopback RPC channel /input-assist:
-//      config.get / config.set — read / merge-persist the namespace
+//      config.get / config.set — read / merge-persist the entry config
 //      complete                — DeepSeek FIM proxy (non-streaming)
 //      proofread               — LLM check (the offline dictionary layer runs
 //                                browser-side; pass llmOnly: true to skip the
@@ -20,11 +24,12 @@ import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-// 仅类型用途：引入 cordis Context 的 settings 服务声明（模块增强）。
-// 0.1.5 起不再导出 settingsNamespace 帮助函数，register 直接收字符串。
-import '@deepseek-ai/dsh-settings'
+// 仅类型用途：cordis Context 的 settings 服务声明（模块增强）、Loader 的
+// fiber.entry（entry id 即 settings 服务的命名空间）。
+import type {} from '@deepseek-ai/dsh-settings'
+import type {} from '@deepseek-ai/cordis-plugin-loader'
 import z from '@deepseek-ai/schemastery'
-import type { Context } from '@deepseek-ai/cordis'
+import type { Context, Volatile } from '@deepseek-ai/cordis'
 import { requestFimCompletion, streamFimCompletion, normalizeSuggestion, listModels } from './completion.js'
 import { scanLocalTypos } from './proofread-dict.js'
 import { llmProofread, locateIssues, mergeIssues } from './proofread-llm.js'
@@ -32,19 +37,39 @@ import { CHANNEL, DEFAULT_CONFIG, NS } from './config.js'
 import type { InputAssistConfig } from './config.js'
 import type { TypoIssue } from './proofread-dict.js'
 
-const ConfigSchema = z.object({
-	completionEnabled: z.boolean().default(DEFAULT_CONFIG.completionEnabled),
-	completionBaseUrl: z.string().default(DEFAULT_CONFIG.completionBaseUrl),
-	completionApiKey: z.string().default(DEFAULT_CONFIG.completionApiKey),
-	completionModel: z.string().default(DEFAULT_CONFIG.completionModel),
-	completionDebounceMs: z.number().default(DEFAULT_CONFIG.completionDebounceMs),
-	completionMaxTokens: z.number().default(DEFAULT_CONFIG.completionMaxTokens),
-	completionStream: z.boolean().default(DEFAULT_CONFIG.completionStream),
-	proofreadEnabled: z.boolean().default(DEFAULT_CONFIG.proofreadEnabled),
-	proofreadUseLlm: z.boolean().default(DEFAULT_CONFIG.proofreadUseLlm),
-	proofreadModel: z.string().default(DEFAULT_CONFIG.proofreadModel),
-	proofreadDebounceMs: z.number().default(DEFAULT_CONFIG.proofreadDebounceMs),
-	proofreadDictDebounceMs: z.number().default(DEFAULT_CONFIG.proofreadDictDebounceMs),
+/** 插件配置形状：Loader 校验后每个字段是 volatile 引用，`.get()` 实时取值
+ *  （settings.update 写 profile entry 后引用随之更新）。 */
+export interface Config {
+	completionEnabled: Volatile<boolean>
+	completionBaseUrl: Volatile<string>
+	completionApiKey: Volatile<string>
+	completionModel: Volatile<string>
+	completionDebounceMs: Volatile<number>
+	completionMaxTokens: Volatile<number>
+	completionStream: Volatile<boolean>
+	proofreadEnabled: Volatile<boolean>
+	proofreadUseLlm: Volatile<boolean>
+	proofreadModel: Volatile<string>
+	proofreadDebounceMs: Volatile<number>
+	proofreadDictDebounceMs: Volatile<number>
+}
+
+/** 声明给 dsh Loader 的配置 schema（默认值 + volatile 引用）：profile entry
+ *  的 config 即持久化位置；completionApiKey 标记 role('secret')，官方设置
+ *  表单路径据此脱敏（本插件自己的 config.get 走环回 RPC，不经该路径）。 */
+export const Config = z.object({
+	completionEnabled: z.boolean().default(DEFAULT_CONFIG.completionEnabled).volatile(),
+	completionBaseUrl: z.string().default(DEFAULT_CONFIG.completionBaseUrl).volatile(),
+	completionApiKey: z.string().role('secret').default(DEFAULT_CONFIG.completionApiKey).volatile(),
+	completionModel: z.string().default(DEFAULT_CONFIG.completionModel).volatile(),
+	completionDebounceMs: z.number().default(DEFAULT_CONFIG.completionDebounceMs).volatile(),
+	completionMaxTokens: z.number().default(DEFAULT_CONFIG.completionMaxTokens).volatile(),
+	completionStream: z.boolean().default(DEFAULT_CONFIG.completionStream).volatile(),
+	proofreadEnabled: z.boolean().default(DEFAULT_CONFIG.proofreadEnabled).volatile(),
+	proofreadUseLlm: z.boolean().default(DEFAULT_CONFIG.proofreadUseLlm).volatile(),
+	proofreadModel: z.string().default(DEFAULT_CONFIG.proofreadModel).volatile(),
+	proofreadDebounceMs: z.number().default(DEFAULT_CONFIG.proofreadDebounceMs).volatile(),
+	proofreadDictDebounceMs: z.number().default(DEFAULT_CONFIG.proofreadDictDebounceMs).volatile(),
 })
 
 /** config.set whitelist: key → primitive type check (schema coerces rest). */
@@ -263,12 +288,6 @@ export function createHandler({ getConfig, updateConfig, inflight: shared }: Han
 		}
 		return rpcError(`unknown endpoint ${String(endpoint)}`)
 	}
-}
-
-/** Settings scope shape returned by the host settings service. */
-interface SettingsScope {
-	get(): InputAssistConfig
-	update(patch: Partial<InputAssistConfig>): Promise<void>
 }
 
 // —— 流式渐进渲染（v0.6）——
@@ -517,13 +536,36 @@ export function createWebServerStreamRoute(handler: (request: Request) => Promis
 	}
 }
 
-/** Cordis entry: settings namespace + loopback RPC registration. */
-function apply(ctx: Context): void {
-	let scope: SettingsScope | undefined = undefined
-	ctx.inject(['settings'], (settingsCtx) => {
-		// 0.1.5：register 直接收命名空间字符串，旧 settingsNamespace 帮助函数已移除
-		scope = settingsCtx.settings.register(NS, ConfigSchema) as unknown as SettingsScope
+/** Cordis entry: Config schema（Loader 校验为 volatile 引用）+ 环回 RPC 注册。 */
+function apply(ctx: Context, config: Config): void {
+	// 本插件 profile entry 的 id（cordis.patch.yml 里 insert 的 id）：
+	// settings 服务的命名空间 = entry id。无 Loader 挂载（如测试直调）时缺失。
+	const entryId = ctx.fiber.entry?.options.id
+	// config 是 Loader 维护的 volatile 引用集：`.get()` 实时取当前值，
+	// settings.update 写 profile entry 后引用随之更新（无需本地副本）。
+	const getConfig = (): InputAssistConfig => ({
+		completionEnabled: config.completionEnabled.get(),
+		completionBaseUrl: config.completionBaseUrl.get(),
+		completionApiKey: config.completionApiKey.get(),
+		completionModel: config.completionModel.get(),
+		completionDebounceMs: config.completionDebounceMs.get(),
+		completionMaxTokens: config.completionMaxTokens.get(),
+		completionStream: config.completionStream.get(),
+		proofreadEnabled: config.proofreadEnabled.get(),
+		proofreadUseLlm: config.proofreadUseLlm.get(),
+		proofreadModel: config.proofreadModel.get(),
+		proofreadDebounceMs: config.proofreadDebounceMs.get(),
+		proofreadDictDebounceMs: config.proofreadDictDebounceMs.get(),
 	})
+	// 0.2.x：设置写入走 settings 服务（挂载于 dsh base bundle；engines.dsh
+	// 已把宿主流 Floor 到 0.2.1-rc.2+，服务缺席属异常装配，报可操作错误）。
+	// config.set 的 RPC 层会把这里的 Error 转成浏览器侧可见的失败提示。
+	const updateConfig = async (patch: Partial<InputAssistConfig>): Promise<void> => {
+		const settings = ctx.get('settings')
+		if (settings === undefined) throw new Error('settings service unavailable (requires the dsh base bundle, dsh >= 0.2.1-rc.2)')
+		if (entryId === undefined) throw new Error('profile entry missing (plugin must be Loader-launched to persist settings)')
+		await settings.update(entryId, patch)
+	}
 
 	// 0.1.5：service 用属性访问（ctx.connection）获取——cordis traceable
 	// 代理把「读取方 ctx」绑定进 service；ctx.get('connection') 绑定的是
@@ -534,17 +576,9 @@ function apply(ctx: Context): void {
 	const connection = connectionOf(ctx)
 	if (connection === undefined) return
 
-	const getConfig = (): InputAssistConfig => scope?.get() ?? { ...DEFAULT_CONFIG }
 	// RPC 与流式路由共享同一张在途注册表：cancel 端点对两者一视同仁
 	const inflight = new Map<string, AbortController>()
-	const handler = createHandler({
-		getConfig,
-		updateConfig: async (patch) => {
-			if (scope === undefined) throw new Error('settings service unavailable')
-			await scope.update(patch)
-		},
-		inflight,
-	})
+	const handler = createHandler({ getConfig, updateConfig, inflight })
 	const streamFetch = createStreamFetchHandler({ getConfig, inflight })
 
 	if (connection.fetch !== undefined) {
@@ -572,10 +606,11 @@ function apply(ctx: Context): void {
 			'input-assist: completion stream route',
 		)
 	} else {
-		// 旧运行时（≤0.1.1-rc.2，无 connection.fetch）：RPC 走 rpc.handle
-		// 原路径（该版本注册不触 webServer，可正常工作）；流式降级
-		// webServer exact 路由（自接栅栏）。两条都注册不上则静默跳过——
-		// 浏览器半边收到 404 会自动降级走 RPC 非流式路径。
+		// 旧运行时（≤0.1.1-rc.2，无 connection.fetch；已在本版 engines.dsh
+		// 支持范围外，仅服务绕过兼容门手动装进旧宿主的场景）：RPC 走
+		// rpc.handle 原路径（该版本注册不触 webServer，可正常工作）；流式
+		// 降级 webServer exact 路由（自接栅栏）。两条都注册不上则静默跳过
+		// ——浏览器半边收到 404 会自动降级走 RPC 非流式路径。
 		ctx.effect(
 			() => connection.rpc.handle(CHANNEL, handler, { authority: 'loopback' }),
 			'input-assist: rpc channel',
@@ -596,4 +631,4 @@ function apply(ctx: Context): void {
 }
 
 export { apply, NS, CHANNEL, DEFAULT_CONFIG }
-export default { apply }
+export default { Config, apply }

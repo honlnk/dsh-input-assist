@@ -30,6 +30,8 @@ DeepSeek Harness（dsh）输入助手插件：
 
 ## 快速开始
 
+要求 dsh ≥ 0.2.1-rc.2（`engines.dsh` 声明，宿主安装/启动时自动拦截不满足的版本；0.1.x 用户请继续用本插件 0.7.x）。
+
 ```shell
 dsh plugin --profile web add dsh-input-assist   # 或 @honlnk/dsh-input-assist，内容完全相同
 dsh --profile web          # 启动，打开 http://127.0.0.1:3080
@@ -48,25 +50,25 @@ dsh plugin --profile web add "$PWD"
 API key 三选一（补全与 LLM 检查层需要；词典层无需任何配置）：
 
 1. 什么都不做——插件自动复用 dsh 已保存的 `DEEPSEEK_API_KEY`（`.credentials.yaml`）或环境变量
-2. 设置页填：侧边栏底部齿轮 → **Plugins → 插件配置 → Input Assist** 卡片（推荐，全部配置图形化）
-3. `~/.dsh/settings.yaml` 里写 `input-assist.completionApiKey: sk-…`，或环境变量 `DEEPSEEK_API_KEY=sk-… dsh web`
+2. 插件详情页填：侧边栏 **Plugins → dsh-input-assist → 配置区**的 Input Assist 卡片（推荐，全部配置图形化）
+3. 环境变量 `DEEPSEEK_API_KEY=sk-… dsh web`（旧版 `~/.dsh/settings.yaml` 写 `input-assist.*` 的方式在 0.2.x 已废止）
 
-## 设置页卡片
+## 设置卡（插件详情页）
 
-所有配置都可在 dsh 设置界面图形化修改：侧边栏底部齿轮 → **Plugins → 插件配置**，找「输入助手」卡片展开即可。交互与官方兄弟卡片（Bash / Agent Loop / Web Search）同构：暂存编辑 → 统一「保存 / 放弃修改」，数字与必填文本本地校验，字段行带「未保存」蓝点与单项撤销（×）。卡片注册走官方 `settings.plugin.item` 插槽（keyed by 设置命名空间），无需新增任何服务依赖；设置文件外部修改仍会热同步进卡片。
+所有配置都可在插件管理页图形化修改：侧边栏 **Plugins** → 点开 **dsh-input-assist** 详情页，「配置」区展开 Input Assist 卡片即可。交互与官方卡片同构：暂存编辑 → 统一「保存 / 放弃修改」，数字与必填文本本地校验，字段行带「未保存」蓝点与单项撤销（×）。卡片注册走官方 `plugins.bundle.config` 插槽（keyed by bundle 包名；0.2.x 起插件设置统一收纳进插件管理页，旧 `settings.plugin.item` 插座已删除），无需新增任何服务依赖；配置持久化进 profile 的插件 entry（`profiles/<name>/cordis.patch.yml`），外部修改仍会热同步进卡片。
 
 模型字段支持**从 API 拉取目录**：点字段旁的 ▾ 方块按钮打开自定义下拉面板，每次打开都自动拉取最新目录，点选即填入；输入框始终是自由文本，任何 OpenAI 兼容端点的自定义模型名都可手填。拉取失败（未配 key、端点不可达）自动退回手填。默认模型已跟随官方迁移：`deepseek-chat` 于 2026-07-24 停用，现为 `deepseek-flash`（V4.1 Flash）。
 
 ## 自定义词库（仅本浏览器）
 
-设置页卡片底部「**自定义词库（仅本浏览器）**」区块是一张成对词条列表：左列错词、右列正词，中英文皆可。点「＋ 添加词条」在末尾追加一对输入框，× 删除该行，拖拽行首把手调整顺序（或聚焦后 ↑/↓ 移动），增删与移动都有平滑动画：
+设置卡底部「**自定义词库（仅本浏览器）**」区块是一张成对词条列表：左列错词、右列正词，中英文皆可。点「＋ 添加词条」在末尾追加一对输入框，× 删除该行，拖拽行首把手调整顺序（或聚焦后 ↑/↓ 移动），增删与移动都有平滑动画：
 
 - 与内置词库**合并**参与词典层本地扫描：同名错词覆盖内置项；错词与正词写成同一个词（自映射）= 不再检查该词（禁用内置词）；英文词条自动走词边界匹配（驼峰、snake_case、点号连接的标识符不会误报）
-- 仅存本浏览器 localStorage（key `dsh-input-assist:user-dict:v1`，存储格式仍为 `错词 => 正词` 一行一条），**不随 settings.yaml 同步**
+- 仅存本浏览器 localStorage（key `dsh-input-assist:user-dict:v1`，存储格式仍为 `错词 => 正词` 一行一条），**不随插件配置同步**
 - 标题行有「**导入 / 导出 / 复制**」：导入选 `.txt` 文件（一行一条 `错词 => 正词`，与内置词库同格式、`#` 注释），同错词就地更新、其余追加进暂存列表，过目后仍要点保存；导出把当前列表（含未保存修改）下载为同格式 `.txt`，复制走剪贴板——换浏览器/换机器搬运全靠它们
 - 上限 2000 条、单条错词 ≤ 16 字；校验问题（空词、连续空白、超长、重复）逐行内联提示，有问题不能保存；与其他设置的修改共用卡片底部的「放弃修改 / 保存」，保存成功后立即按新词库重新标红
 
-## 配置（settings.yaml → `input-assist`，或设置页卡片图形化修改）
+## 配置（插件详情页图形化修改；持久化进 profile 的插件 entry config）
 
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
@@ -116,19 +118,20 @@ npm test        # build → tsc --noEmit → node --test（类型错在本地即
 - [docs/14-流式渐进渲染-实施记录.md](./docs/14-流式渐进渲染-实施记录.md) — 流式渐进渲染实施记录：fetch 流式路由传输层调研、SSE 帧协议、Tab 流中采纳、降级矩阵
 - [docs/16-dsh-0.1.5-适配.md](./docs/16-dsh-0.1.5-适配.md) — dsh 0.1.5-rc.2 适配：webServer 注入、snapshot store 收编、RPC over fetch 双路径（0.1.1 旧运行时兼容）
 - [docs/17-输入框contenteditable适配.md](./docs/17-输入框contenteditable适配.md) — 输入框 contenteditable 适配：0.1.5 composer 换 Lexical 后 ghost 无声不弹的根因与全链路修复（双运行时）
+- [docs/19-dsh-0.2.1-适配.md](./docs/19-dsh-0.2.1-适配.md) — dsh 0.2.1-rc.2 适配：设置体系迁移（volatile Config / plugins.bundle.config 插槽 / settings.update）、Tab 采纳改 insertText、engines.dsh 门禁、隔离环境真机验收
 
 ## 架构一览
 
 ```
 浏览器半边（lib/client.js，tsdown 从 src/client.ts 打包）   host 半边（lib/index.js）
-  input.overlay  仅错误提示（无浮层）     loopback    settings 命名空间 input-assist
+  input.overlay  仅错误提示（无浮层）     loopback    Config schema（volatile 字段）
   input.dock     错别字面板+修正      ───RPC（0.1.5+：fetch 路由 /api/input-assist/rpc；
   input.right    补/校 开关               ≤0.1.1：rpc.handle /input-assist）───▶
   fetch POST /api/input-assist/stream                complete   → FIM /beta/completions（非流式）
     ↳ SSE 帧驱动 ghost 逐字渐显                      proofread → LLM 层（llmOnly）
-  settings.plugin.item  设置页卡片（Plugins→插件配置）  cancel     → 断开在途请求（RPC 与流式一视同仁）
-  useInput 读草稿 · inputActions.setDraft 写回          stream 路由 → FIM stream:true，帧回写 {delta}/{done}
-  镜像层（body 挂载）：文中红字 + 光标后灰色 ghost 建议（rAF 合帧渲染）
+  plugins.bundle.config  设置卡（Plugins→插件详情页）  cancel     → 断开在途请求（RPC 与流式一视同仁）
+  useInput 读草稿 · inputActions.insertText / setDraft 写回  settings.update(entryId, patch) 持久化进 profile
+  镜像层（body 挂载）：文中红字 + 光标处灰色 ghost 建议（rAF 合帧渲染）
   词典层本地运行（单源 src/proofread-dict.ts，构建时打进 client bundle）
   自带 snapshot store（src/snapshot-store.ts，结构满足宿主 ObservableSnapshot 契约）
 ```
@@ -151,6 +154,8 @@ npm test        # build → tsc --noEmit → node --test（类型错在本地即
 - [x] 流式渐进渲染（SSE 首 token 渐显 + 半路掐断；代码与测试已完成，2026-09-20 真机验收通过：SSE 帧驱动 ghost 渐显、Tab 流中采纳）
 - [x] 适配 dsh 0.1.5-rc.2（2026-09-15：cordis webServer 注入、client-runtime 消亡收编 snapshot store、RPC over fetch 双路径；0.1.1 旧运行时兼容，116 测试全绿 + 真机 curl 冒烟通过）
 - [x] 输入框 contenteditable 适配（2026-09-20：0.1.5 composer 换 Lexical contenteditable 导致 ghost 无声不弹；findComposer 双运行时定位、光标块级走查、镜像层/Tab 采纳/键盘拦截全链路适配，真机浏览器验收通过，详见 [docs/17](./docs/17-输入框contenteditable适配.md)）
+- [x] 句中补全渲染（ghost 按 sugCaret 定位显示而非追加在草稿末尾；光标移开即隐藏；逐词采纳后 ghost 跟着右移；buildMirrorHtml 纯函数化 + 7 组单测）
+- [x] 适配 dsh 0.2.1-rc.2（2026-10-23：设置体系迁移——volatile Config + `settings.update(entryId)` 持久化进 profile、设置卡迁移 `plugins.bundle.config` 插槽、Tab 采纳改走 `insertText` 句中采纳光标不再跳到草稿末尾、`engines.dsh` 版本门禁；124 测试全绿 + 隔离环境 dsh 0.2.1-rc.2 真机验收通过，详见 [docs/19](./docs/19-dsh-0.2.1-适配.md)）
 
 ## 发布流程
 

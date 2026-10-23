@@ -1,7 +1,7 @@
 // 设置卡片守卫（v5.1）：两路验证 ——
 //   1. 纯表单逻辑（src/settings-form.ts，tsdown 打进 lib/client.js）经假
 //      ModuleLoader 取回：字段清单完整性、暂存优先级、解析与校验边界
-//   2. apply() 对 settings.plugin.item 的注册断言（key=命名空间、inject
+//   2. apply() 对 plugins.bundle.config 的注册断言（key=bundle 包名、inject
 //      形状、原有 conversation.input.* 四个座位不受影响）
 
 import { readFileSync } from 'node:fs'
@@ -14,14 +14,14 @@ import { DEFAULT_CONFIG } from '../lib/index.js'
 const here = dirname(fileURLToPath(import.meta.url))
 const clientSource = readFileSync(join(here, '../lib/client.js'), 'utf8')
 
-function loadBundleExports() {
+function loadBundleExports(createElement) {
 	let captured = null
 	globalThis.window = { __ModuleLoader__: { load: (def) => { captured = def } } }
 	// eslint-disable-next-line no-new-func
 	new Function(clientSource)()
 	assert.ok(captured !== null, 'ModuleLoader.load 未被调用')
 	const reactStub = {
-		createElement: () => null,
+		createElement: createElement ?? (() => null),
 		useEffect: () => {},
 		useLayoutEffect: () => {},
 		useState: (v) => [typeof v === 'function' ? v() : v, () => {}],
@@ -261,7 +261,7 @@ test('exportUserDictText：注释头 + 有效词条，半填行不导出，解�
 })
 
 // —— apply() 注册断言 ——
-test('apply() 注册 settings.plugin.item 卡片（key=input-assist）', () => {
+test('apply() 注册 plugins.bundle.config 卡片（key=dsh-input-assist）', () => {
 	const registrations = []
 	const services = {
 		slots: {
@@ -276,16 +276,19 @@ test('apply() 注册 settings.plugin.item 卡片（key=input-assist）', () => {
 	}
 	api.apply({ get: (name) => services[name], effect: () => {} })
 
-	const seats = registrations.filter((r) => r.slot === 'settings.plugin.item')
-	assert.equal(seats.length, 1, 'settings.plugin.item 应回调注册恰好一次')
+	const seats = registrations.filter((r) => r.slot === 'plugins.bundle.config')
+	assert.equal(seats.length, 1, 'plugins.bundle.config 应回调注册恰好一次')
 	const { meta, component } = seats[0].entry
-	assert.equal(meta.key, 'input-assist')
+	assert.equal(meta.key, 'dsh-input-assist')
 	assert.equal(meta.locale, 'input-assist')
 	assert.equal(typeof component, 'function')
 	const injected = meta.inject()
 	assert.equal(typeof injected.api.save, 'function')
 	assert.equal(typeof injected.api.fetchModels, 'function')
 	assert.equal(typeof injected.hooks.config, 'object')
+
+	// 旧座位不再注册（0.2.x 宿主已删除该插座）
+	assert.equal(registrations.filter((r) => r.slot === 'settings.plugin.item').length, 0)
 
 	// 原有四个输入框座位不受影响
 	const conv = registrations.filter((r) => r.slot.startsWith('conversation.input.'))
@@ -307,7 +310,7 @@ test('SettingsCard 冒烟：props 缺失返回 null，完整 props 不抛', asyn
 		remote: { $on: () => () => {} },
 	}
 	api.apply({ get: (name) => services[name], effect: () => {} })
-	const card = registrations.find((r) => r.slot === 'settings.plugin.item').entry.component
+	const card = registrations.find((r) => r.slot === 'plugins.bundle.config').entry.component
 
 	assert.equal(card({ t: (k) => k }), null)
 	assert.equal(card({ useConfig: (sel) => sel(DEFAULT_CONFIG), t: (k) => k }), null)
@@ -317,4 +320,30 @@ test('SettingsCard 冒烟：props 缺失返回 null，完整 props 不抛', asyn
 		api: { save: async () => true },
 	})
 	assert.equal(rendered, null) // react 桩 createElement 恒返 null；不抛即形状正确
+})
+
+// —— view 派发：'summary' 不依赖表单数据，渲染一句话描述 ——
+test('PluginConfigCard：view=summary 渲染描述段落，无需 useConfig/api', () => {
+	const registrations = []
+	const services = {
+		slots: {
+			inject: (slot, register) => {
+				registrations.push({ slot, entry: register() })
+			},
+			register: (meta, component) => ({ meta, component }),
+		},
+		locale: { register: () => () => {} },
+		connection: { rpc: { call: async () => ({ ok: true, value: {} }) } },
+		remote: { $on: () => () => {} },
+	}
+	// 独立加载一份 bundle，createElement 记录标签与文案以观察渲染结果
+	const api2 = loadBundleExports((tag, props, ...children) => ({ tag, props, children }))
+	api2.apply({ get: (name) => services[name], effect: () => {} })
+	const card = registrations.find((r) => r.slot === 'plugins.bundle.config').entry.component
+
+	const out = card({ view: 'summary', t: (k) => k })
+	assert.deepEqual(out, { tag: 'p', props: { className: 'ia_scardDesc' }, children: ['settings.description'] })
+	// 'page' 与缺省 view 走完整设置卡（缺 useConfig 时安全 null）
+	assert.equal(card({ view: 'page', t: (k) => k }), null)
+	assert.equal(card({ t: (k) => k }), null)
 })
